@@ -1,54 +1,64 @@
 ---
-  name: 🚀 上传模组文件
-  description: 通过这个模板上传一个新的模组版本文件，机器人会自动处理。
-  title: "[Upload] MC<请填写游戏版本>-<请选择加载器>-<请填写加载器版本>-v<请填写模组版本>"
-  labels: ["file-upload"]
-  body:
-    - type: markdown
-      attributes:
-        value: |
-          感谢你为保存这个模组所做的贡献！请按照下方格式填写信息，并将模组文件（.jar）直接拖拽到下方的上传区域。
-          
-          **重要：** 提交前，请务必手动修改上方的 **Issue 标题**，使其符合格式要求，例如：`[Upload] MC1.20.1-NeoForge-47.1.0-v2.3.1`
-    - type: dropdown
-      id: mod-loader
-      attributes:
-        label: 模组加载器
-        description: "请选择此模组文件使用的加载器。"
-        options:
-          - Forge
-          - Fabric
-          - NeoForge
-      validations:
-        required: true
-    - type: input
-      id: loader-version
-      attributes:
-        label: 模组加载器版本
-        description: "请输入加载器的版本号，例如: 47.1.0 (对应NeoForge/Forge) 或 0.14.21 (对应Fabric)"
-        placeholder: "47.1.0"
-      validations:
-        required: true
-    - type: input
-      id: mc-version
-      attributes:
-        label: Minecraft 版本
-        description: "请输入此模组文件对应的 Minecraft 版本，例如: 1.20.1"
-        placeholder: "1.20.1"
-      validations:
-        required: true
-    - type: input
-      id: mod-version
-      attributes:
-        label: 模组版本号
-        description: "请输入模组本身的版本号，例如: 2.3.1"
-        placeholder: "2.3.1"
-      validations:
-        required: true
-    - type: textarea
-      id: release-notes
-      attributes:
-        label: Release 说明 (可选)
-        description: "这段文字会自动添加到 Release 页面的描述中。"
-        placeholder: "这个版本有什么特别之处吗？"
-  
+name: 🚀 上传模组文件
+description: 通过这个模板上传一个新的模组版本文件，机器人会自动处理。
+title: "[Upload] MC<请填写游戏版本>-<请选择加载器>-<请填写加载器版本>-v<请填写模组版本>"
+labels: ["file-upload"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚠️ 重要：上传文件前请务必阅读！
+        
+        GitHub 不允许直接上传 `.jar` 文件。为了绕过这个限制，请**先将你的 `.jar` 文件重命名为 `.zip` 文件**，然后再上传。
+        
+        **例如：**
+        1.  你的文件是 `MyAwesomeMod-v2.3.1.jar`
+        2.  将它重命名为 `MyAwesomeMod-v2.3.1.jar.zip`
+        3.  将这个 `.zip` 文件拖拽到下方的上传区域
+        
+        机器人会自动识别并恢复正确的文件名。
+        
+        ---
+        
+        感谢你为保存这个模组所做的贡献！请按照下方格式填写信息。
+  - type: dropdown
+    id: mod-loader
+    attributes:
+      label: 模组加载器
+      description: "请选择此模组文件使用的加载器。"
+      options:
+        - Forge
+        - Fabric
+        - NeoForge
+    validations:
+      required: true
+  - type: input
+    id: loader-version
+    attributes:
+      label: 模组加载器版本
+      description: "请输入加载器的版本号，例如: 47.1.0 (对应NeoForge/Forge) 或 0.14.21 (对应Fabric)"
+      placeholder: "47.1.0"
+    validations:
+      required: true
+  - type: input
+    id: mc-version
+    attributes:
+      label: Minecraft 版本
+      description: "请输入此模组文件对应的 Minecraft 版本，例如: 1.20.1"
+      placeholder: "1.20.1"
+    validations:
+      required: true
+  - type: input
+    id: mod-version
+    attributes:
+      label: 模组版本号
+      description: "请输入模组本身的版本号，例如: 2.3.1"
+      placeholder: "2.3.1"
+    validations:
+      required: true
+  - type: textarea
+    id: release-notes
+    attributes:
+      label: Release 说明 (可选)
+      description: "这段文字会自动添加到 Release 页面的描述中。"
+      placeholder: "这个版本有什么特别之处吗？"

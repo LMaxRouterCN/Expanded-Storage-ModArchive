@@ -1,2 +1,29 @@
 # Expanded-Storage-ModArchive
-欢迎各位将手中的Expanded Storage mod文件存放在这里并永久留存. You are welcome to upload your Expanded Storage mod files here for permanent storage.
+# Expanded-Storage 归档库
+
+这是一个用于保存和归档 Expanded-Storage 各个版本的社区项目。由于原模组已被作者删除，我希望通过大家的力量找回那些残存的版本。
+
+## 🚀 如何贡献一个版本？
+
+1.  点击本仓库页面上方的 [**Issues**](../../issues) 标签页。
+2.  点击绿色的 [**New issue**](../../issues/new/choose) 按钮。
+3.  选择 **"🚀 上传模组文件"** 模板。
+4.  **严格按照模板要求填写信息**，特别是 **Minecraft 版本** 和 **模组版本号**。
+5.  将你的 `.jar` 模组文件直接拖拽到上传区域。
+6.  点击 **"Submit new issue"** 提交。
+
+然后，就没有然后了！喝杯茶，几分钟后回来刷新，你就能看到你的 Release 了。
+
+## 📦 下载所有版本
+
+点击本仓库上方的 [**Releases**](../../releases) 标签页，即可看到所有已归档的版本并下载。
+
+## ⚠️ 重要声明
+
+*   本模组的版权归其原作者所有。
+*   本仓库仅为非盈利的存档和学习目的，禁止用于任何商业行为。
+*   我们尽力保证文件安全，但下载和使用仍存在风险，请自行负责。
+*   如果原作者联系并要求删除，我们将立即遵从。
+
+感谢每一位为这个项目做出贡献的人！
+

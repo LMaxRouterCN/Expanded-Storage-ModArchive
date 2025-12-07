@@ -9,11 +9,11 @@ body:
       value: |
         ## ⚠️ 重要：上传文件前请务必阅读！
         
-        GitHub 不允许直接上传 `.jar` 文件。为了绕过这个限制，请**先将你的 `.jar` 文件重命名为 `.zip` 文件**，然后再上传。
+        GitHub的issues中**不允许**直接上传 `.jar` 文件。为了绕过这个限制，请**先将你的 `.jar` 文件重命名为 `.zip` 文件**，然后再上传。
         
         **例如：**
-        1.  你的文件是 `MyAwesomeMod-v2.3.1.jar`
-        2.  将它重命名为 `MyAwesomeMod-v2.3.1.jar.zip`
+        1.  你的文件是 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge`
+        2.  将它重命名为 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge.zip`
         3.  将这个 `.zip` 文件拖拽到下方的上传区域
         
         机器人会自动识别并恢复正确的文件名。
@@ -52,8 +52,8 @@ body:
     id: mod-version
     attributes:
       label: 模组版本号
-      description: "请输入模组本身的版本号，例如: 2.3.1"
-      placeholder: "2.3.1"
+      description: "请输入模组本身的版本号，例如: 10.3.0-beta.5 (有的版本无特殊后缀则不用输入)"
+      placeholder: "10.3.0-beta.5"
     validations:
       required: true
   - type: textarea

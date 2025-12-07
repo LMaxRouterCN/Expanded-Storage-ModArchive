@@ -13,7 +13,6 @@ permissions:
 jobs:
   create-release:
     # 保守：仅在新建 issue 且标题以 [Upload] 开头时运行。
-    # 注意：如果你也想通过 issue_comment 触发，请按需调整 condition
     if: github.event.action == 'opened' && startsWith(github.event.issue.title, '[Upload]')
     runs-on: ubuntu-latest
     env:

@@ -6,7 +6,7 @@ on:
 
 jobs:
   create-release:
-    if: github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'file-upload')
+    if: github.event.action == 'opened' && startsWith(github.event.issue.title, '[Upload]')
     runs-on: ubuntu-latest
     permissions:
       contents: write

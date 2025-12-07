@@ -13,7 +13,7 @@ permissions:
 jobs:
   create-release:
     # 保守：仅在新建 issue 且标题以 [Upload] 开头时运行。
-    # 注意：如果你也想通过 issue_comment 触发，请见下方说明如何调整此条件。
+    # 注意：如果你也想通过 issue_comment 触发，请按需调整 condition
     if: github.event.action == 'opened' && startsWith(github.event.issue.title, '[Upload]')
     runs-on: ubuntu-latest
     env:
@@ -49,7 +49,7 @@ jobs:
             mod_version=$(echo "${parts[3]}" | sed -E 's/^v//I')
           fi
 
-          # 如果标题解析不全，尝试从 issue body 内寻找类似的 mc... tag
+          # 如果标题解析不全，尝试从 issue body 找类似的 tag
           if [ -z "$mc_version" ] || [ -z "$loader" ] || [ -z "$loader_version" ] || [ -z "$mod_version" ]; then
             body=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
             TAG_FROM_BODY=$(echo "$body" | grep -oE 'mc[^[:space:]]+' | head -n1 || true)
@@ -74,8 +74,9 @@ jobs:
             echo "Failed to parse version info from title or body. Please use title format: '[Upload] MC<mc>-<loader>-<loader_version>-v<mod_version>' or include a 'mc...' tag in the issue body."
             issue_number=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
             comment="⚠️ 无法从标题或正文解析版本信息。请使用标题格式：'[Upload] MC<mc>-<loader>-<loader_version>-v<mod_version>'，例如 '[Upload] MC1.20.1-NeoForge-47.1.0-v2.3.1'，或在正文包含类似 'mc1.20.1-NeoForge-47.1.0-v2.3.1' 的 tag。"
+            # 使用 jq 生成 JSON，避免引号/换行引起的问题
             curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d "{\"body\": $(jq -Rn --arg b \"$comment\" '$b')}" \
+              -d "$(jq -nc --arg b "$comment" '{"body":$b}')" \
               "${{ github.api_url }}/repos/${{ github.repository }}/issues/$issue_number/comments" >/dev/null || true
             exit 1
           fi
@@ -109,16 +110,27 @@ jobs:
             combined_text="$combined_text\n$comments_bodies"
           fi
 
-          # 提取所有 http(s) 链接，去重
-          urls=$(echo -e "$combined_text" | grep -oE 'https?://[^) \"'\''\]>]+' | sort -u || true)
+          # 提取所有 http(s) 链接
+          # 注意：尽量保守地排除常见的结尾符号
+          urls=$(echo -e "$combined_text" | grep -oE 'https?://[^)\"'\'\s\]\>]+[^\.,\)\]\>\s]' | sort -u || true)
 
           if [ -z "$urls" ]; then
-            echo "No URLs found in issue body/comments. Exiting."
-            exit 1
+            echo "No URLs found in issue body/comments. Skipping release creation."
+            # 明确输出空 filename，供后续步骤判断
+            echo "filename=" >> $GITHUB_OUTPUT
+            echo "skip_reason=No URLs found in issue body/comments." >> $GITHUB_OUTPUT
+
+            comment="⚠️ 未在 Issue 内容或评论中发现可直接下载的文件链接（例如以 .jar 或 .zip 结尾的 URL）。请在 Issue 或评论中提供一个可直接下载的链接，或将文件上传到可直接下载的托管（例如 GitHub Releases、Dropbox/GDrive 直链等）。"
+            curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "$(jq -nc --arg b "$comment" '{"body":$b}')" \
+              "${{ github.api_url }}/repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments" >/dev/null || true
+            # 以成功结束本步骤，但后续步骤会依据 filename 是否为空来决定是否继续
+            exit 0
           fi
 
           chosen_url=""
           chosen_ct=""
+          headers=""
           for url in $urls; do
             echo "Checking: $url"
             headers=$(curl -IsL "$url" || true)
@@ -131,7 +143,6 @@ jobs:
               echo "  Skipping HTML page."
               continue
             fi
-            # 跳过指向 issues 页面等非文件的 github 页面
             if echo "$url" | grep -qE 'github.com/.*/issues'; then
               echo "  Skipping issue/page URL."
               continue
@@ -142,8 +153,15 @@ jobs:
           done
 
           if [ -z "$chosen_url" ]; then
-            echo "No suitable downloadable URL found (non-HTML). Exiting."
-            exit 1
+            echo "No suitable downloadable URL found (non-HTML)."
+            echo "filename=" >> $GITHUB_OUTPUT
+            echo "skip_reason=No suitable downloadable URL found (non-HTML)." >> $GITHUB_OUTPUT
+
+            comment="⚠️ 找到链接但无法识别为直接下载资源（服务器返回 HTML 页面或被重定向到 Issue 页面）。请提供可直接下载的链接（直连到文件，返回的 Content-Type 不是 text/html）。"
+            curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "$(jq -nc --arg b "$comment" '{"body":$b}')" \
+              "${{ github.api_url }}/repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments" >/dev/null || true
+            exit 0
           fi
 
           echo "Downloading $chosen_url ..."
@@ -159,20 +177,17 @@ jobs:
 
           curl -L -o "$filename" "$chosen_url"
 
-          # 保守策略：保持原文件名，但如果你确实需要 jar 后缀可以把下面一行打开
-          # mv "$filename" mod_file.jar
-          # echo "filename=mod_file.jar" >> $GITHUB_OUTPUT
-
           echo "filename=$filename" >> $GITHUB_OUTPUT
 
       - name: Create Release
         id: create_release
+        if: steps.download_file.outputs.filename != ''
         uses: actions/create-release@v1
         with:
           tag_name: ${{ steps.parse_version.outputs.tag_name }}
           release_name: "MC ${{ steps.parse_version.outputs.mc_version }} - ${{ steps.parse_version.outputs.loader }} ${{ steps.parse_version.outputs.loader_version }} - v${{ steps.parse_version.outputs.mod_version }}"
           body: |
-            此版本由社区成员 @${{ github.event.issue.user.login }} 贡献。
+            此版本由社区成员 @${{ github.event.issue.user.login }} 提供。
             **环境信息:**
             - Minecraft: `${{ steps.parse_version.outputs.mc_version }}`
             - 加载器: `${{ steps.parse_version.outputs.loader }} ${{ steps.parse_version.outputs.loader_version }}`
@@ -187,6 +202,7 @@ jobs:
 
       - name: Upload asset to Release
         id: upload_asset
+        if: steps.download_file.outputs.filename != ''
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -197,6 +213,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Comment on Issue with Release link
+        if: steps.download_file.outputs.filename != ''
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -206,10 +223,11 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `✅ 感谢您的贡献！Release 已自动创建: ${releaseUrl}`
+              body: `✅ 感谢您的投放！Release 已自动创建: ${releaseUrl}`
             })
 
       - name: Close Issue
+        if: steps.download_file.outputs.filename != ''
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

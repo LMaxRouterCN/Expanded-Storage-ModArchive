@@ -3,14 +3,21 @@ name: Auto Release from Issue
 on:
   issues:
     types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   create-release:
+    # 保守：仅在新建 issue 且标题以 [Upload] 开头时运行。
+    # 注意：如果你也想通过 issue_comment 触发，请见下方说明如何调整此条件。
     if: github.event.action == 'opened' && startsWith(github.event.issue.title, '[Upload]')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -19,82 +26,197 @@ jobs:
       - name: Parse version from issue title
         id: parse_version
         run: |
-          # 示例标题: "[Upload] MC1.20.1-NeoForge-47.1.0-v2.3.1"
-          title="${{ github.event.issue.title }}"
-          part1=$(echo "$title" | cut -d'-' -f1)
-          part2=$(echo "$title" | cut -d'-' -f2)
-          part3=$(echo "$title" | cut -d'-' -f3)
-          part4=$(echo "$title" | cut -d'-' -f4)
-          mc_version=$(echo "$part1" | sed 's/.*MC//')
-          loader="$part2"
-          loader_version="$part3"
-          mod_version=$(echo "$part4" | sed 's/.*v//')
+          set -euo pipefail
+          title=$(jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH")
+          title_no_prefix=$(echo "$title" | sed -E 's/^\[Upload\]\s*//I')
+
+          IFS='-' read -r -a parts <<< "$title_no_prefix"
+          mc_version=""
+          loader=""
+          loader_version=""
+          mod_version=""
+
+          if [ ${#parts[@]} -ge 1 ]; then
+            mc_version=$(echo "${parts[0]}" | sed -E 's/^MC//I')
+          fi
+          if [ ${#parts[@]} -ge 2 ]; then
+            loader="${parts[1]}"
+          fi
+          if [ ${#parts[@]} -ge 3 ]; then
+            loader_version="${parts[2]}"
+          fi
+          if [ ${#parts[@]} -ge 4 ]; then
+            mod_version=$(echo "${parts[3]}" | sed -E 's/^v//I')
+          fi
+
+          # 如果标题解析不全，尝试从 issue body 内寻找类似的 mc... tag
           if [ -z "$mc_version" ] || [ -z "$loader" ] || [ -z "$loader_version" ] || [ -z "$mod_version" ]; then
-            echo "Error: Failed to parse version from title. Please check the format."
+            body=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+            TAG_FROM_BODY=$(echo "$body" | grep -oE 'mc[^[:space:]]+' | head -n1 || true)
+            if [ -n "$TAG_FROM_BODY" ]; then
+              IFS='-' read -r -a tparts <<< "$TAG_FROM_BODY"
+              if [ ${#tparts[@]} -ge 1 ]; then
+                mc_version=$(echo "${tparts[0]}" | sed -E 's/^mc//I')
+              fi
+              if [ ${#tparts[@]} -ge 2 ]; then
+                loader="${tparts[1]}"
+              fi
+              if [ ${#tparts[@]} -ge 3 ]; then
+                loader_version="${tparts[2]}"
+              fi
+              if [ ${#tparts[@]} -ge 4 ]; then
+                mod_version=$(echo "${tparts[3]}" | sed -E 's/^v//I')
+              fi
+            fi
+          fi
+
+          if [ -z "$mc_version" ] || [ -z "$loader" ] || [ -z "$loader_version" ] || [ -z "$mod_version" ]; then
+            echo "Failed to parse version info from title or body. Please use title format: '[Upload] MC<mc>-<loader>-<loader_version>-v<mod_version>' or include a 'mc...' tag in the issue body."
+            issue_number=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+            comment="⚠️ 无法从标题或正文解析版本信息。请使用标题格式：'[Upload] MC<mc>-<loader>-<loader_version>-v<mod_version>'，例如 '[Upload] MC1.20.1-NeoForge-47.1.0-v2.3.1'，或在正文包含类似 'mc1.20.1-NeoForge-47.1.0-v2.3.1' 的 tag。"
+            curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "{\"body\": $(jq -Rn --arg b \"$comment\" '$b')}" \
+              "${{ github.api_url }}/repos/${{ github.repository }}/issues/$issue_number/comments" >/dev/null || true
             exit 1
           fi
+
           echo "mc_version=$mc_version" >> $GITHUB_OUTPUT
           echo "loader=$loader" >> $GITHUB_OUTPUT
           echo "loader_version=$loader_version" >> $GITHUB_OUTPUT
           echo "mod_version=$mod_version" >> $GITHUB_OUTPUT
-          echo "tag_name=mc${mc_version}-${loader}-${loader_version}-v${mod_version}" >> $GITHUB_OUTPUT
+          tag_name="mc${mc_version}-${loader}-${loader_version}-v${mod_version}"
+          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
 
       - name: Download and rename mod file from issue
         id: download_file
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 获取第一个附件的 URL
-          asset_url=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "${{ github.api_url }}/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/assets" | jq -r '.[0].url')
-          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
-            echo "No asset found in the issue. Exiting."
+          set -euo pipefail
+
+          OWNER_REPO="${{ github.repository }}"
+          ISSUE_NUMBER=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+
+          # 如果事件是 comment（例如 issue_comment.created），优先取 comment.body
+          event_has_comment=$(jq 'has("comment")' "$GITHUB_EVENT_PATH" || echo false)
+          combined_text=""
+          if [ "$event_has_comment" = "true" ]; then
+            combined_text=$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")
+          else
+            combined_text=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+            comments_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "${{ github.api_url }}/repos/$OWNER_REPO/issues/$ISSUE_NUMBER/comments")
+            comments_bodies=$(echo "$comments_json" | jq -r '.[].body' || true)
+            combined_text="$combined_text\n$comments_bodies"
+          fi
+
+          # 提取所有 http(s) 链接，去重
+          urls=$(echo -e "$combined_text" | grep -oE 'https?://[^) \"'\''\]>]+' | sort -u || true)
+
+          if [ -z "$urls" ]; then
+            echo "No URLs found in issue body/comments. Exiting."
             exit 1
           fi
-          echo "Downloading asset from: $asset_url"
-          # 下载文件，并保存为 .zip 后缀
-          curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/octet-stream" "$asset_url" -o mod_file.zip
-          
-          # 【关键步骤】将 .zip 文件重命名为 .jar
-          mv mod_file.zip mod_file.jar
-          
-          echo "filename=mod_file.jar" >> $GITHUB_OUTPUT
 
-      - name: Create Release and Upload Asset
-        uses: softprops/action-gh-release@v1
+          chosen_url=""
+          chosen_ct=""
+          for url in $urls; do
+            echo "Checking: $url"
+            headers=$(curl -IsL "$url" || true)
+            content_type=$(echo "$headers" | tr -d '\r' | awk -F': ' '/^[Cc]ontent-[Tt]ype/{print $2}' | head -n1 || true)
+            echo "  Content-Type: ${content_type:-unknown}"
+            if [ -z "$content_type" ]; then
+              content_type=$(curl -sIL "$url" | tr -d '\r' | awk -F': ' '/^[Cc]ontent-[Tt]ype/{print $2}' | head -n1 || true)
+            fi
+            if [ -n "$content_type" ] && echo "$content_type" | grep -qi 'text/html'; then
+              echo "  Skipping HTML page."
+              continue
+            fi
+            # 跳过指向 issues 页面等非文件的 github 页面
+            if echo "$url" | grep -qE 'github.com/.*/issues'; then
+              echo "  Skipping issue/page URL."
+              continue
+            fi
+            chosen_url="$url"
+            chosen_ct="$content_type"
+            break
+          done
+
+          if [ -z "$chosen_url" ]; then
+            echo "No suitable downloadable URL found (non-HTML). Exiting."
+            exit 1
+          fi
+
+          echo "Downloading $chosen_url ..."
+          disposition=$(echo "$headers" | tr -d '\r' | awk -F': ' '/[Cc]ontent-[Dd]isposition/{print $2}' | sed 's/.*filename=//I' || true)
+          if [[ "$disposition" =~ \"?([^\";]+)\"? ]]; then
+            filename="${BASH_REMATCH[1]}"
+          else
+            filename=$(basename "${chosen_url%%\?*}")
+          fi
+          if [ -z "$filename" ]; then
+            filename="asset_$(date +%s)"
+          fi
+
+          curl -L -o "$filename" "$chosen_url"
+
+          # 保守策略：保持原文件名，但如果你确实需要 jar 后缀可以把下面一行打开
+          # mv "$filename" mod_file.jar
+          # echo "filename=mod_file.jar" >> $GITHUB_OUTPUT
+
+          echo "filename=$filename" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
         with:
           tag_name: ${{ steps.parse_version.outputs.tag_name }}
-          name: "MC ${{ steps.parse_version.outputs.mc_version }} - ${{ steps.parse_version.outputs.loader }} ${{ steps.parse_version.outputs.loader_version }} - v${ steps.parse_version.outputs.mod_version }}"
+          release_name: "MC ${{ steps.parse_version.outputs.mc_version }} - ${{ steps.parse_version.outputs.loader }} ${{ steps.parse_version.outputs.loader_version }} - v${{ steps.parse_version.outputs.mod_version }}"
           body: |
             此版本由社区成员 @${{ github.event.issue.user.login }} 贡献。
-            
             **环境信息:**
             - Minecraft: `${{ steps.parse_version.outputs.mc_version }}`
             - 加载器: `${{ steps.parse_version.outputs.loader }} ${{ steps.parse_version.outputs.loader_version }}`
             - 模组版本: `${{ steps.parse_version.outputs.mod_version }}`
-            
             ---
             **原始 Issue 信息:**
             ${{ github.event.issue.body }}
-          files: ${{ steps.download_file.outputs.filename }}
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Comment on Issue
+      - name: Upload asset to Release
+        id: upload_asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ steps.download_file.outputs.filename }}
+          asset_name: ${{ steps.download_file.outputs.filename }}
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on Issue with Release link
         uses: actions/github-script@v6
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const releaseUrl = context.payload.repository.html_url + '/releases/tag/' + `${{ steps.parse_version.outputs.tag_name }}`;
             github.rest.issues.createComment({
-              issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `✅ 感谢您的贡献！Release 已自动创建: [查看 Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.parse_version.outputs.tag_name }}) \n\n 这个 Issue 将被自动关闭。`
-            });
+              issue_number: context.issue.number,
+              body: `✅ 感谢您的贡献！Release 已自动创建: ${releaseUrl}`
+            })
 
       - name: Close Issue
         uses: actions/github-script@v6
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             github.rest.issues.update({
-              issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
+              issue_number: context.issue.number,
               state: 'closed'
-            });
+            })

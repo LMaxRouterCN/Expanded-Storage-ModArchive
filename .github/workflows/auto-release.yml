@@ -6,12 +6,11 @@ on:
 
 jobs:
   create-release:
-    # 只在 issue 被打开且带有 'file-upload' 标签时运行
     if: github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'file-upload')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 授予写入内容的权限，以创建 Release
-      issues: write   # 授予写入 issue 的权限，以添加评论和关闭 Issue
+      contents: write
+      issues: write
 
     steps:
       - name: Checkout repository
@@ -22,36 +21,25 @@ jobs:
         run: |
           # 示例标题: "[Upload] MC1.20.1-NeoForge-47.1.0-v2.3.1"
           title="${{ github.event.issue.title }}"
-          
-          # 使用 cut 命令按 '-' 分割字符串，非常稳健
           part1=$(echo "$title" | cut -d'-' -f1)
           part2=$(echo "$title" | cut -d'-' -f2)
           part3=$(echo "$title" | cut -d'-' -f3)
           part4=$(echo "$title" | cut -d'-' -f4)
-          
-          # 提取 MC 版本
           mc_version=$(echo "$part1" | sed 's/.*MC//')
-          # 提取加载器
           loader="$part2"
-          # 提取加载器版本
           loader_version="$part3"
-          # 提取模组版本
           mod_version=$(echo "$part4" | sed 's/.*v//')
-          
-          # 校验是否解析成功
           if [ -z "$mc_version" ] || [ -z "$loader" ] || [ -z "$loader_version" ] || [ -z "$mod_version" ]; then
             echo "Error: Failed to parse version from title. Please check the format."
-            echo "Expected format: [Upload] MC<version>-<loader>-<loader_version>-v<mod_version>"
             exit 1
           fi
-          
           echo "mc_version=$mc_version" >> $GITHUB_OUTPUT
           echo "loader=$loader" >> $GITHUB_OUTPUT
           echo "loader_version=$loader_version" >> $GITHUB_OUTPUT
           echo "mod_version=$mod_version" >> $GITHUB_OUTPUT
           echo "tag_name=mc${mc_version}-${loader}-${loader_version}-v${mod_version}" >> $GITHUB_OUTPUT
 
-      - name: Download mod file from issue
+      - name: Download and rename mod file from issue
         id: download_file
         run: |
           # 获取第一个附件的 URL
@@ -61,7 +49,12 @@ jobs:
             exit 1
           fi
           echo "Downloading asset from: $asset_url"
-          curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/octet-stream" "$asset_url" -o mod_file.jar
+          # 下载文件，并保存为 .zip 后缀
+          curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/octet-stream" "$asset_url" -o mod_file.zip
+          
+          # 【关键步骤】将 .zip 文件重命名为 .jar
+          mv mod_file.zip mod_file.jar
+          
           echo "filename=mod_file.jar" >> $GITHUB_OUTPUT
 
       - name: Create Release and Upload Asset

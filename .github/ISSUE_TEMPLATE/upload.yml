@@ -12,8 +12,8 @@ body:
         GitHub的issues中**不允许**直接上传 `.jar` 文件。为了绕过这个限制，请**先将你的 `.jar` 文件重命名为 `.zip` 文件**，然后再上传。
         
         **例如：**
-        1.  你的文件是 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge`
-        2.  将它重命名为 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge.zip`
+        1.  你的文件是 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge.jar`
+        2.  将它重命名为 `扩展存储 expandedstorage-10.3.0-beta.5+1.20.1-forge.jar.zip`
         3.  将这个 `.zip` 文件拖拽到下方的上传区域
         
         机器人会自动识别并恢复正确的文件名。

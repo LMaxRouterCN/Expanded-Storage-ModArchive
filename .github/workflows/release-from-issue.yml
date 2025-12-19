@@ -25,7 +25,6 @@ jobs:
             const body = issue.body || '';
             const title = issue.title || '';
             
-            // 调试信息
             console.log('=== 调试信息 ===');
             console.log('标题:', title);
             console.log('正文预览 (前200字符):', body.substring(0, 200));
@@ -54,7 +53,7 @@ jobs:
               return;
             }
             
-            // 2. 从正文提取所有URL (关键修复)
+            // 2. 从正文提取所有URL
             const urls = [];
             
             // 策略1: 匹配Markdown图片/链接语法
@@ -72,10 +71,11 @@ jobs:
             const pureUrls = body.match(urlRegex) || [];
             urls.push(...pureUrls);
             
-            console.log('检测到的URL:', urls);
+            // 去重
+            const uniqueUrls = [...new Set(urls)];
+            console.log('检测到的URL:', uniqueUrls);
             
-            if (urls.length === 0) {
-              // 提供详细指导
+            if (uniqueUrls.length === 0) {
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
@@ -93,10 +93,10 @@ jobs:
             }
             
             // 3. 选择第一个有效的.zip URL
-            let fileUrl = urls.find(url => url.toLowerCase().includes('.jar.zip')) || urls[0];
+            let fileUrl = uniqueUrls.find(url => url.toLowerCase().includes('.jar.zip')) || uniqueUrls[0];
             fileUrl = fileUrl.trim();
             
-            // 4. 修复特殊字符 (关键!)
+            // 4. 修复特殊字符
             fileUrl = fileUrl
               .replace(/%2B/g, '+')
               .replace(/%20/g, ' ')
@@ -138,49 +138,27 @@ jobs:
             }
             
             // 7. 智能文件名修复
-            const lowerName = originalName.toLowerCase();
             let cleanedName = originalName;
+            const lowerName = cleanedName.toLowerCase();
             
+            // 确保以.zip结尾
             if (!lowerName.endsWith('.zip')) {
-              // 添加.zip后缀
               cleanedName += '.zip';
             }
             
+            // 确保包含.jar
             if (!lowerName.includes('.jar')) {
-              // 插入.jar (在.zip前)
-              const base = cleanedName.substring(0, cleanedName.length - 4);
-              cleanedName = base + '.jar.zip';
+              // 在.zip前插入.jar
+              cleanedName = cleanedName.replace(/\.zip$/, '.jar.zip');
             }
             
             console.log('最终文件名:', cleanedName);
             
-            // 8. 获取文件大小
-            let contentLength = 0;
-            try {
-              const headers = { 
-                'Authorization': `Bearer ${{ secrets.GITHUB_TOKEN }}`,
-                'User-Agent': 'Mozilla/5.0 (compatible; GitHub-Actions)'
-              };
-              
-              const response = await fetch(fileUrl, {
-                method: 'HEAD',
-                headers,
-                redirect: 'follow'
-              });
-              
-              if (response.ok) {
-                contentLength = parseInt(response.headers.get('content-length') || '0');
-              }
-            } catch (error) {
-              console.log('HEAD请求失败:', error.message);
-            }
-            
-            // 设置输出
+            // 8. 设置输出
             core.setOutput('file_url', fileUrl);
             core.setOutput('original_name', cleanedName);
             core.setOutput('jar_name', cleanedName.replace(/\.zip$/i, '.jar'));
-            core.setOutput('file_size', contentLength || 1024);
-            core.setOutput('debug_urls', urls.join(', '));
+            core.setOutput('debug_urls', uniqueUrls.join('\n'));
 
       - name: Download file
         env:
@@ -201,7 +179,7 @@ jobs:
             --retry 3 \
             --retry-delay 5 \
             --max-time 300 \
-            -o "$SAFE_NAME" \
+            --output "$SAFE_NAME" \
             "$FILE_URL"
           
           # 验证文件
@@ -271,7 +249,7 @@ jobs:
               
               const release = releases.data.find(r => r.tag_name === `sha256-${sha256}`);
               if (release) {
-                const jar = release.assets.find(a => a.name.endsWith('.jar'));
+                const jar = release.assets.find(a => a.name.toLowerCase().endsWith('.jar'));
                 if (jar) {
                   await github.rest.issues.createComment({
                     issue_number: context.issue.number,
@@ -300,7 +278,14 @@ jobs:
             core.setOutput('duplicate', 'false');
             core.setOutput('short_hash', shortHash);
 
+      - name: Rename to JAR
+        if: steps.check_duplicates.outputs.duplicate == 'false'
+        run: |
+          mv "${{ steps.extract_attachment.outputs.original_name }}" "${{ steps.extract_attachment.outputs.jar_name }}"
+          echo "重命名为JAR完成"
+
       - name: Create release
+        id: create_release
         if: steps.check_duplicates.outputs.duplicate == 'false'
         uses: actions/github-script@v7
         with:
@@ -310,40 +295,57 @@ jobs:
             const { basename } = require('path');
             
             const tagName = `sha256-${{ steps.verify_zip.outputs.sha256_hash }}`;
-            const releaseName = `Mod Upload - ${{ steps.check_duplicates.outputs.short_hash }}`;
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const releaseName = `Mod Upload ${timestamp} - ${{ steps.check_duplicates.outputs.short_hash }}`;
             const jarFile = '${{ steps.extract_attachment.outputs.jar_name }}';
             const jarName = basename(jarFile);
+            const fileSize = fs.statSync(jarFile).size;
             
-            // 重命名
-            fs.renameSync('${{ steps.extract_attachment.outputs.original_name }}', jarFile);
-            
-            // 创建Release
-            const {  release } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tagName,
-              name: releaseName,
-              body: `✅ 上传自 Issue #${context.issue.number}\n\n⚠️ 仅仓库管理员可删除此文件`,
-              draft: false,
-              prerelease: false
-            });
-            
-            // 上传文件
-            const asset = await github.rest.repos.uploadReleaseAsset({
-              url: release.upload_url,
-              headers: {
-                'content-length': fs.statSync(jarFile).size,
-                'content-type': 'application/java-archive'
-              },
-              name: jarName,
-               createReadStream(jarFile)
-            });
-            
-            core.setOutput('release_url', release.html_url);
-            core.setOutput('download_url', asset.browser_download_url);
+            try {
+              // 检查release是否已存在
+              try {
+                await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag: tagName
+                });
+                core.setFailed('文件已存在');
+                return;
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+              
+              // 创建Release
+              const release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+                name: releaseName,
+                body: `✅ 上传自 Issue #${context.issue.number}\n\n⚠️ 仅仓库管理员可删除此文件`,
+                draft: false,
+                prerelease: false
+              });
+              
+              // 上传文件
+              const asset = await github.rest.repos.uploadReleaseAsset({
+                url: release.data.upload_url,
+                headers: {
+                  'content-length': fileSize,
+                  'content-type': 'application/java-archive'
+                },
+                name: jarName,
+                data: createReadStream(jarFile)
+              });
+              
+              core.setOutput('release_url', release.data.html_url);
+              core.setOutput('download_url', asset.data.browser_download_url);
+            } catch (error) {
+              console.error('创建Release失败:', error);
+              core.setFailed(`上传失败: ${error.message || '未知错误'}`);
+            }
 
       - name: Comment success
-        if: steps.check_duplicates.outputs.duplicate == 'false'
+        if: steps.check_duplicates.outputs.duplicate == 'false' && steps.create_release.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |

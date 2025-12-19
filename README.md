@@ -3,7 +3,7 @@
 
 这是一个用于保存和归档 Expanded-Storage 各个版本的社区项目, 由于原模组的所有下载途径已被作者删除, 我创建了这个项目希望能重新集中保存剩下的模组版本以为每个仍然想下载的人提供便利.
 
-[原模组页面](https://www.mcmod.cn/class/3583.html)
+[模组mcmod页面](https://www.mcmod.cn/class/3583.html)
 
 ## 🚀 如何贡献一个版本？
 

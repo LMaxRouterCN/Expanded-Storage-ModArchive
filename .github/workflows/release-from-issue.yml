@@ -137,7 +137,7 @@ jobs:
               originalName = match ? match[1].replace(/\+/g, ' ') : 'unknown.zip';
             }
             
-            // 7. 智能文件名修复
+            // 7. 智能文件名修复 - 关键修复：正确处理.jar.zip
             let cleanedName = originalName;
             const lowerName = cleanedName.toLowerCase();
             
@@ -146,18 +146,31 @@ jobs:
               cleanedName += '.zip';
             }
             
-            // 确保包含.jar
+            // 确保包含.jar（在.zip之前）
             if (!lowerName.includes('.jar')) {
               // 在.zip前插入.jar
               cleanedName = cleanedName.replace(/\.zip$/, '.jar.zip');
+            } else {
+              // 修复重复.jar问题 - 关键修复
+              cleanedName = cleanedName.replace(/\.jar\.zip$/i, '.jar.zip');
             }
             
-            console.log('最终文件名:', cleanedName);
+            console.log('修复后的文件名:', cleanedName);
             
-            // 8. 设置输出
+            // 8. 设置正确的JAR文件名 - 关键修复：只移除.zip后缀
+            let jarName = cleanedName;
+            if (jarName.toLowerCase().endsWith('.jar.zip')) {
+              jarName = jarName.substring(0, jarName.length - 4); // 移除.zip
+            } else if (jarName.toLowerCase().endsWith('.zip')) {
+              jarName = jarName.substring(0, jarName.length - 4) + '.jar';
+            }
+            
+            console.log('JAR文件名:', jarName);
+            
+            // 9. 设置输出
             core.setOutput('file_url', fileUrl);
             core.setOutput('original_name', cleanedName);
-            core.setOutput('jar_name', cleanedName.replace(/\.zip$/i, '.jar'));
+            core.setOutput('jar_name', jarName); // 关键修复：正确JAR文件名
             core.setOutput('debug_urls', uniqueUrls.join('\n'));
 
       - name: Download file
@@ -282,7 +295,7 @@ jobs:
         if: steps.check_duplicates.outputs.duplicate == 'false'
         run: |
           mv "${{ steps.extract_attachment.outputs.original_name }}" "${{ steps.extract_attachment.outputs.jar_name }}"
-          echo "重命名为JAR完成"
+          echo "重命名为JAR完成: ${{ steps.extract_attachment.outputs.jar_name }}"
 
       - name: Create release
         id: create_release

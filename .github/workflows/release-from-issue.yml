@@ -53,48 +53,44 @@ jobs:
               return;
             }
             
-            // 2. 使用新方法提取字段 - 适配GitHub实际生成的Markdown
+            // 2. 提取字段 - 适配GitHub实际渲染格式
             let mcVersion = '';
             let loader = '';
             let modVersion = '';
             
-            // 方法1: 匹配YAML格式的字段 (GitHub新格式)
-            const yamlRegex = /(?:\n\s*|- )([\w\s]+):\s*([^\n]+)/g;
-            let yamlMatch;
-            while ((yamlMatch = yamlRegex.exec(body)) !== null) {
-              const field = yamlMatch[1].trim();
-              const value = yamlMatch[2].trim();
-              
-              if (/mc版本/i.test(field)) {
-                mcVersion = value;
-              } else if (/模组加载器/i.test(field)) {
-                // 提取选中的加载器
-                const loaderMatch = value.match(/\[(x|X)\]\s*(forge|neoforge|fabric)/i);
-                if (loaderMatch) {
-                  loader = loaderMatch[2].toLowerCase();
-                }
-              } else if (/模组版本/i.test(field)) {
-                modVersion = value;
+            // 方法1: 匹配###标题格式 (GitHub实际渲染格式)
+            const sections = body.split('### ');
+            for (const section of sections) {
+              if (section.startsWith('MC版本')) {
+                mcVersion = section.split('\n')[1]?.trim() || '';
+              } else if (section.startsWith('模组加载器')) {
+                loader = section.split('\n')[1]?.trim().toLowerCase() || '';
+              } else if (section.startsWith('模组版本')) {
+                modVersion = section.split('\n')[1]?.trim() || '';
               }
             }
             
-            // 方法2: 匹配传统Markdown格式 (兼容旧版)
-            if (!mcVersion) {
-              const mcMatch = body.match(/MC版本\s*[:：]?\s*\n\s*([^\n]+)/i);
-              mcVersion = mcMatch ? mcMatch[1].trim() : '';
+            console.log('提取结果 (方法1):');
+            console.log('MC版本:', mcVersion);
+            console.log('加载器:', loader);
+            console.log('模组版本:', modVersion);
+            
+            // 方法2: 备用正则 (兼容其他格式)
+            if (!mcVersion || !loader || !modVersion) {
+              const mcRegex = /###\s*MC版本\s*\n\s*([^\n]+)/i;
+              const loaderRegex = /###\s*模组加载器\s*\n\s*([^\n]+)/i;
+              const modRegex = /###\s*模组版本\s*\n\s*([^\n]+)/i;
+              
+              const mcMatch = body.match(mcRegex);
+              const loaderMatch = body.match(loaderRegex);
+              const modMatch = body.match(modRegex);
+              
+              if (mcMatch) mcVersion = mcMatch[1].trim();
+              if (loaderMatch) loader = loaderMatch[1].trim().toLowerCase();
+              if (modMatch) modVersion = modMatch[1].trim();
             }
             
-            if (!loader) {
-              const loaderMatch = body.match(/模组加载器[^]*?-\s*\[(x|X)\]\s*(forge|neoforge|fabric)/i);
-              loader = loaderMatch ? loaderMatch[2].toLowerCase() : '';
-            }
-            
-            if (!modVersion) {
-              const modMatch = body.match(/模组版本\s*[:：]?\s*\n\s*([^\n]+)/i);
-              modVersion = modMatch ? modMatch[1].trim() : '';
-            }
-            
-            console.log('提取结果:');
+            console.log('最终提取结果:');
             console.log('MC版本:', mcVersion);
             console.log('加载器:', loader);
             console.log('模组版本:', modVersion);
@@ -106,13 +102,17 @@ jobs:
             if (!modVersion) missingFields.push('模组版本');
             
             if (missingFields.length > 0) {
-              // 提供详细的缺失字段提示
-              let errorMessage = `❌ **缺少必填字段**\n\n请补充以下信息:\n`;
-              if (!mcVersion) errorMessage += `- [ ] **MC版本** (例如: 1.20.1)\n`;
-              if (!loader) errorMessage += `- [ ] **模组加载器** (选择: forge/neoforge/fabric)\n`;
-              if (!modVersion) errorMessage += `- [ ] **模组版本** (例如: 10.3.0-beta.5)\n\n`;
+              let errorMessage = `❌ **缺少必填字段**\n\n检测到的字段值:\n`;
+              errorMessage += `- MC版本: \`${mcVersion || '未检测到'}\`\n`;
+              errorMessage += `- 模组加载器: \`${loader || '未检测到'}\`\n`;
+              errorMessage += `- 模组版本: \`${modVersion || '未检测到'}\`\n\n`;
               
-              errorMessage += `**修复方法**:\n1. 点击Issue右上角的"Edit"按钮\n2. 补充缺失字段\n3. 重新提交`;
+              errorMessage += `**可能原因**:\n`;
+              if (!loader) errorMessage += `- GitHub下拉选择框未被正确识别\n`;
+              errorMessage += `\n**解决方案**:\n`;
+              errorMessage += `1. 编辑Issue，在"模组加载器"字段**手动输入** (forge/neoforge/fabric)\n`;
+              errorMessage += `2. 确保每个字段**单独一行** (不要合并)\n`;
+              errorMessage += `3. 重新提交Issue`;
               
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
@@ -130,10 +130,30 @@ jobs:
               return;
             }
             
-            // 4. 清理字段值 (创建合法tag)
+            // 4. 验证加载器值
+            const validLoaders = ['forge', 'neoforge', 'fabric'];
+            if (!validLoaders.includes(loader)) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `❌ **无效的模组加载器**\n\n检测到: \`${loader}\`\n\n**必须选择以下之一**:\n- forge\n- neoforge\n- fabric\n\n请编辑Issue修正后重新提交`
+              });
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed'
+              });
+              core.setFailed('Invalid loader value');
+              return;
+            }
+            
+            // 5. 清理字段值 (创建合法tag)
             const cleanTagPart = (str) => {
               return str.toLowerCase()
                 .replace(/[^a-z0-9.+_-]/g, '-') // 替换非法字符
+                .replace(/\+/g, '-')            // 特殊处理+号
                 .replace(/-+/g, '-')            // 合并连续-
                 .replace(/^-+|-+$/g, '');       // 移除前后-
             };
@@ -142,25 +162,27 @@ jobs:
             const cleanLoader = cleanTagPart(loader);
             const cleanModVersion = cleanTagPart(modVersion);
             
-            // 5. 生成tag (v<mc版本>-<加载器>-<模组版本>)
+            // 6. 生成tag (v<mc版本>-<加载器>-<模组版本>)
             let releaseTag = `v${cleanMcVersion}-${cleanLoader}-${cleanModVersion}`;
             console.log('生成的Release Tag:', releaseTag);
             
-            // 6. 提取附件URL (保持不变)
+            // 7. 提取附件URL - 修复空格问题
             const urls = [];
-            const markdownRegex = /!\[[^\]]*\]\(([^)]+?)\)|\[[^\]]*\]\(([^)]+?)\)/g;
+            
+            // 匹配附件链接 (处理末尾空格)
+            const attachmentRegex = /\[([^\]]+?)\]\((https?:\/\/[^\s]+?\.zip[^\s]*?)\s*\)/ig;
             let urlMatch;
-            while ((urlMatch = markdownRegex.exec(body)) !== null) {
-              const url = urlMatch[1] || urlMatch[2];
-              if (url && url.includes('.zip')) {
-                urls.push(url);
-              }
+            while ((urlMatch = attachmentRegex.exec(body)) !== null) {
+              const url = urlMatch[2].trim();
+              urls.push(url);
             }
             
+            // 备用: 匹配纯URL
             const urlRegex = /(https?:\/\/[^\s)]+?\.zip[^\s)]*)/ig;
             const pureUrls = body.match(urlRegex) || [];
             urls.push(...pureUrls);
             
+            // 去重
             const uniqueUrls = [...new Set(urls)];
             console.log('检测到的URL:', uniqueUrls);
             
@@ -169,7 +191,7 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue`
+                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue\n\nℹ️ 您的文件应显示为类似:\n\`[文件名.jar.zip](https://...)\``
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -181,46 +203,37 @@ jobs:
               return;
             }
             
-            // 7. 选择第一个有效的.zip URL
+            // 8. 选择第一个有效的.zip URL
             let fileUrl = uniqueUrls.find(url => url.toLowerCase().includes('.jar.zip')) || uniqueUrls[0];
             fileUrl = fileUrl.trim();
             
-            // 8. 修复特殊字符
+            // 9. 修复特殊字符
             fileUrl = fileUrl
               .replace(/%2B/g, '+')
               .replace(/%20/g, ' ')
               .replace(/&amp;/g, '&')
-              .replace(/&#43;/g, '+');
+              .replace(/&#43;/g, '+')
+              .replace(/\s+$/, ''); // 移除末尾空格
             
-            // 9. 处理GitHub代理URL
-            if (fileUrl.includes('user-attachments.githubusercontent.com')) {
-              fileUrl = fileUrl.replace(
-                'https://user-attachments.githubusercontent.com/',
-                'https://github.com/'
-              );
-            } else if (fileUrl.includes('private-user-attachments')) {
-              fileUrl = fileUrl.replace(
-                'https://private-user-attachments.githubusercontent.com/',
-                'https://github.com/'
-              );
-            }
+            console.log('处理后的文件URL:', fileUrl);
             
             // 10. 提取文件名
             let originalName = '';
             try {
+              // 从URL获取原始文件名
               const urlObj = new URL(fileUrl, 'https://github.com');
-              const params = new URLSearchParams(urlObj.search);
+              const path = urlObj.pathname;
+              originalName = decodeURIComponent(path.substring(path.lastIndexOf('/') + 1));
               
+              // 从URL参数获取 (如果存在)
+              const params = new URLSearchParams(urlObj.search);
               if (params.has('name')) {
                 originalName = decodeURIComponent(params.get('name'));
-              } else {
-                const path = urlObj.pathname;
-                originalName = decodeURIComponent(path.substring(path.lastIndexOf('/') + 1));
               }
             } catch (e) {
               console.log('URL解析失败，使用备用方法');
               const match = fileUrl.match(/\/([^\/?]+?)(?:\?|$)/);
-              originalName = match ? match[1].replace(/\+/g, ' ') : 'unknown.zip';
+              originalName = match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : 'unknown.zip';
             }
             
             // 11. 智能文件名修复
@@ -242,7 +255,7 @@ jobs:
             // 12. 设置正确的JAR文件名
             let jarName = cleanedName;
             if (jarName.toLowerCase().endsWith('.jar.zip')) {
-              jarName = jarName.substring(0, jarName.length - 4);
+              jarName = jarName.substring(0, jarName.length - 4); // 移除.zip
             } else if (jarName.toLowerCase().endsWith('.zip')) {
               jarName = jarName.substring(0, jarName.length - 4) + '.jar';
             }

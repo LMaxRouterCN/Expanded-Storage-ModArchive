@@ -12,17 +12,42 @@ body:
         2. **直接拖拽**文件到下方评论框  
            (等待上传完成，看到文件链接)
         3. **不要**点击"Attach files"按钮
+  - type: input
+    id: mc-version
+    attributes:
+      label: MC版本
+      description: "Minecraft版本 (例如: 1.20.1)"
+      placeholder: "1.20.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: loader
+    attributes:
+      label: 模组加载器
+      description: "选择模组适用的加载器"
+      options:
+        - forge
+        - neoforge
+        - fabric
+    validations:
+      required: true
+  - type: input
+    id: mod-version
+    attributes:
+      label: 模组版本
+      description: "模组的具体版本 (例如: 10.3.0-beta.5)"
+      placeholder: "10.3.0-beta.5"
+    validations:
+      required: true
   - type: textarea
     id: mod-info
     attributes:
       label: 模组信息
       description: |
-        请提供:
-        - 模组名称
-        - Minecraft版本 (如1.20.1)
-        - Forge/Fabric版本
-    validations:
-      required: true
+        请提供额外信息 (可选):
+        - 模组来源
+        - 功能说明
+        - 兼容性注意事项
   - type: checkboxes
     id: confirmation
     attributes:

@@ -1,95 +1,154 @@
-name: Create Release from Issue Upload
+name: Mod File Uploader
 
-# 触发条件：当一个新的 Issue 被打开时
 on:
   issues:
     types: [opened]
 
-# 权限设置：需要写入内容和评论 Issue 的权限
-permissions:
-  contents: write
-  issues: write
-
 jobs:
-  create-release:
-    # 如果 Issue 不是由 'upload' 标签创建的，则跳过
-    if: contains(github.event.issue.labels.*.name, 'upload')
+  process-upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      actions: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Validate issue
+        id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            
+            // 检查是否包含.zip附件
+            const zipAttachments = body.match(/!\[[^\]]*\]\(([^)]+\.zip)\)/g);
+            if (!zipAttachments || zipAttachments.length === 0) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `❌ 未检测到有效的.zip附件\n\n请按模板要求将.jar文件重命名为**.jar.zip**后重新上传`
+              });
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed'
+              });
+              core.setFailed('No valid zip attachment found');
+              return;
+            }
+            
+            // 提取第一个有效URL
+            const match = zipAttachments[0].match(/\(([^)]+\.zip)\)/);
+            const fileUrl = match[1];
+            const originalName = decodeURIComponent(fileUrl.split('/').pop().split('?')[0]);
+            
+            // 验证文件名格式
+            if (!originalName.endsWith('.jar.zip')) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `❌ 无效的文件名格式\n\n请将文件重命名为 **.jar.zip** 后缀（例如：mod.jar.zip）`
+              });
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed'
+              });
+              core.setFailed('Invalid filename format');
+              return;
+            }
+            
+            core.setOutput('file_url', fileUrl);
+            core.setOutput('original_name', originalName);
+            core.setOutput('jar_name', originalName.replace(/\.zip$/, ''));
 
-      - name: Parse Issue Body and Extract Info
-        id: parse_issue
+      - name: Download attachment
+        if: steps.validate.outcome == 'success'
+        env:
+          FILE_URL: ${{ steps.validate.outputs.file_url }}
         run: |
-          # 将 Issue Body 内容存入变量
-          BODY="${{ github.event.issue.body }}"
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "$FILE_URL" \
+            -o "${{ steps.validate.outputs.original_name }}"
 
-          # 使用 sed 提取模组版本
-          MOD_VERSION=$(echo "$BODY" | sed -n '/### 模组版本/,/###/p' | sed '1d;$d' | xargs)
-          echo "mod_version=$MOD_VERSION" >> $GITHUB_OUTPUT
-
-          # 使用 sed 提取 Minecraft 版本
-          MC_VERSION=$(echo "$BODY" | sed -n '/### Minecraft 版本/,/###/p' | sed '1d;$d' | xargs)
-          echo "mc_version=$MC_VERSION" >> $GITHUB_OUTPUT
-
-          # 使用 sed 提取模组加载器
-          MOD_LOADER=$(echo "$BODY" | sed -n '/### 模组加载器/,/###/p' | sed '1d;$d' | xargs)
-          echo "mod_loader=$MOD_LOADER" >> $GITHUB_OUTPUT
-          
-          # 使用 sed 提取更新日志
-          RELEASE_NOTES=$(echo "$BODY" | sed -n '/### 更新日志/,/###/p' | sed '1d;$d' | xargs)
-          # 对换行符进行转义，以便在 gh release 命令中使用
-          RELEASE_NOTES_ESCAPED=$(echo "$RELEASE_NOTES" | sed ':a;N;$!ba;s/\n/\\n/g')
-          echo "release_notes=$RELEASE_NOTES_ESCAPED" >> $GITHUB_OUTPUT
-
-          # 检查是否有附件
-          ASSET_JSON=$(echo '${{ github.event.issue.assets }}' | jq -r '.[0]')
-          if [ "$ASSET_JSON" == "null" ]; then
-            echo "ERROR: No file asset found in the issue."
-            gh issue comment ${{ github.event.issue.number }} --body "❌ **错误**: 未在 Issue 中找到上传的文件。请确保你已经将 `.jar.zip` 文件拖拽到上传区域。"
-            exit 1
-          fi
-          
-          # 获取附件名称和下载URL
-          ASSET_NAME=$(echo "$ASSET_JSON" | jq -r '.name')
-          ASSET_URL=$(echo "$ASSET_JSON" | jq -r '.browser_download_url')
-          
-          echo "asset_name=$ASSET_NAME" >> $GITHUB_OUTPUT
-          echo "asset_url=$ASSET_URL" >> $GITHUB_OUTPUT
-
-      - name: Download and Rename Asset
+      - name: Rename to JAR
+        if: steps.validate.outcome == 'success'
         run: |
-          # 下载文件
-          wget -O "${{ steps.parse_issue.outputs.asset_name }}" "${{ steps.parse_issue.outputs.asset_url }}"
-          
-          # 检查文件名是否以 .jar.zip 结尾
-          ORIGINAL_FILENAME="${{ steps.parse_issue.outputs.asset_name }}"
-          if [[ "$ORIGINAL_FILENAME" != *.jar.zip ]]; then
-            echo "ERROR: Uploaded file does not end with .jar.zip"
-            gh issue comment ${{ github.event.issue.number }} --body "❌ **错误**: 上传的文件名不正确。请确保你的文件名以 `.jar.zip` 结尾。当前文件名: \`$ORIGINAL_FILENAME\`"
-            exit 1
-          fi
-          
-          # 去掉末尾的 .zip
-          FINAL_FILENAME="${ORIGINAL_FILENAME%.zip}"
-          mv "$ORIGINAL_FILENAME" "$FINAL_FILENAME"
-          echo "final_filename=$FINAL_FILENAME" >> $GITHUB_OUTPUT
+          mv "${{ steps.validate.outputs.original_name }}" "${{ steps.validate.outputs.jar_name }}"
 
-      - name: Create GitHub Release
+      - name: Create release
         id: create_release
-        run: |
-          # 构建发布说明
-          NOTES="**模组版本:** ${{ steps.parse_issue.outputs.mod_version }}\n**Minecraft 版本:** ${{ steps.parse_issue.outputs.mc_version }}\n**模组加载器:** ${{ steps.parse_issue.outputs.mod_loader }}\n\n---\n\n${{ steps.parse_issue.outputs.release_notes }}"
-          
-          # 创建 Release
-          gh release create "v${{ steps.parse_issue.outputs.mod_version }}" "$FINAL_FILENAME" \
-            --title "Expanded Storage v${{ steps.parse_issue.outputs.mod_version }} for ${{ steps.parse_issue.outputs.mc_version }}" \
-            --notes "$NOTES" \
-            --latest
+        if: steps.validate.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { createReadStream } = require('fs');
+            const { join } = require('path');
+            
+            // 生成唯一Release名称
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const tagName = `upload-${timestamp}`;
+            const releaseName = `Mod Upload (${timestamp})`;
+            const jarFile = join(process.cwd(), '${{ steps.validate.outputs.jar_name }}');
+            
+            // 创建Release
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              name: releaseName,
+              body: `Uploaded via issue #${context.issue.number}\n\n⚠️ **注意**：只有仓库管理员可以删除此文件`,
+              draft: false,
+              prerelease: false
+            });
+            
+            // 上传JAR文件
+            const fileStream = createReadStream(jarFile);
+            const contentLength = fs.statSync(jarFile).size;
+            
+            const asset = await github.rest.repos.uploadReleaseAsset({
+              url: release.data.upload_url,
+              headers: {
+                'content-length': contentLength,
+                'content-type': 'application/java-archive'
+              },
+              name: '${{ steps.validate.outputs.jar_name }}',
+              data: fileStream
+            });
+            
+            core.setOutput('release_url', release.data.html_url);
+            core.setOutput('download_url', asset.data.browser_download_url);
 
-      - name: Comment on Issue with Success Message
+      - name: Comment success
+        if: steps.create_release.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const downloadUrl = `${{ steps.create_release.outputs.download_url }}`;
+            const releaseUrl = `${{ steps.create_release.outputs.release_url }}`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ 上传成功！\n\n📥 下载链接: [${{ steps.validate.outputs.jar_name }}](${downloadUrl})\n\n📦 Release页面: [查看所有文件](${releaseUrl})`
+            });
+            await github.rest.issues.update({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed'
+            });
+
+      - name: Cleanup
+        if: always()
         run: |
-          RELEASE_URL="${{ github.server_url }}/${{ github.repository }}/releases/v${{ steps.parse_issue.outputs.mod_version }}"
-          gh issue comment ${{ github.event.issue.number }} --body "✅ **上传成功!** \n\n模组文件已自动处理并创建为一个新的 Release。\n\n🔗 [查看 Release here]($RELEASE_URL)"
+          rm -f *.zip *.jar || true

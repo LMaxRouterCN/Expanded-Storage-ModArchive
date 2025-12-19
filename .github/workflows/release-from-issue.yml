@@ -16,8 +16,8 @@ jobs:
       issues: write
 
     steps:
-      - name: Extract attachment URL
-        id: extract_attachment
+      - name: Parse issue fields
+        id: parse_fields
         uses: actions/github-script@v7
         with:
           script: |
@@ -27,14 +27,14 @@ jobs:
             
             console.log('=== 调试信息 ===');
             console.log('标题:', title);
-            console.log('正文预览 (前200字符):', body.substring(0, 200));
+            console.log('正文预览 (前300字符):', body.substring(0, 300));
             console.log('=== 调试结束 ===');
             
             // 1. 验证模板使用
             const usesTemplate = 
               title.includes('[UPLOAD]') || 
               body.includes('重要提示') || 
-              body.includes('重命名为 **.jar.zip**');
+              body.includes('模组加载器');
             
             if (!usesTemplate) {
               await github.rest.issues.createComment({
@@ -53,20 +53,75 @@ jobs:
               return;
             }
             
-            // 2. 从正文提取所有URL
+            // 2. 提取必填字段
+            const mcVersionMatch = body.match(/-\s*MC版本\s*:\s*(.+)/i);
+            const loaderMatch = body.match(/-\s*模组加载器\s*:\s*\[x\]\s*(forge|neoforge|fabric)/i);
+            const modVersionMatch = body.match(/-\s*模组版本\s*:\s*(.+)/i);
+            
+            let mcVersion = mcVersionMatch ? mcVersionMatch[1].trim() : '';
+            let loader = loaderMatch ? loaderMatch[1].trim().toLowerCase() : '';
+            let modVersion = modVersionMatch ? modVersionMatch[1].trim() : '';
+            
+            console.log('提取字段:');
+            console.log('MC版本:', mcVersion);
+            console.log('加载器:', loader);
+            console.log('模组版本:', modVersion);
+            
+            // 3. 验证必填字段
+            const missingFields = [];
+            if (!mcVersion) missingFields.push('MC版本');
+            if (!loader) missingFields.push('模组加载器');
+            if (!modVersion) missingFields.push('模组版本');
+            
+            if (missingFields.length > 0) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `❌ **缺少必填字段**\n\n请补充以下信息:\n` + 
+                      missingFields.map(field => `- [ ] ${field}`).join('\n') + 
+                      `\n\n修改Issue后重新提交`
+              });
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed'
+              });
+              core.setFailed('Missing required fields');
+              return;
+            }
+            
+            // 4. 清理字段值 (创建合法tag)
+            const cleanTagPart = (str) => {
+              return str.toLowerCase()
+                .replace(/[^a-z0-9.+_-]/g, '-') // 替换非法字符
+                .replace(/-+/g, '-')            // 合并连续-
+                .replace(/^-+|-+$/g, '');       // 移除前后-
+            };
+            
+            const cleanMcVersion = cleanTagPart(mcVersion);
+            const cleanLoader = cleanTagPart(loader);
+            const cleanModVersion = cleanTagPart(modVersion);
+            
+            // 5. 生成tag (v<mc版本>-<加载器>-<模组版本>)
+            let releaseTag = `v${cleanMcVersion}-${cleanLoader}-${cleanModVersion}`;
+            console.log('生成的Release Tag:', releaseTag);
+            
+            // 6. 从正文提取所有URL
             const urls = [];
             
             // 策略1: 匹配Markdown图片/链接语法
             const markdownRegex = /!\[[^\]]*\]\(([^)]+?)\)|\[[^\]]*\]\(([^)]+?)\)/g;
-            let match;
-            while ((match = markdownRegex.exec(body)) !== null) {
-              const url = match[1] || match[2];
+            let urlMatch;
+            while ((urlMatch = markdownRegex.exec(body)) !== null) {
+              const url = urlMatch[1] || urlMatch[2];
               if (url && url.includes('.zip')) {
                 urls.push(url);
               }
             }
             
-            // 策略2: 匹配纯URL (GitHub新附件格式)
+            // 策略2: 匹配纯URL
             const urlRegex = /(https?:\/\/[^\s)]+?\.zip[^\s)]*)/ig;
             const pureUrls = body.match(urlRegex) || [];
             urls.push(...pureUrls);
@@ -80,7 +135,7 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框 (不是点击按钮)\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue\n\nℹ️ 您的文件应显示为类似:\n\`https://github.com/user-attachments/files/.../filename.jar.zip\``
+                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框 (不是点击按钮)\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue`
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -92,18 +147,18 @@ jobs:
               return;
             }
             
-            // 3. 选择第一个有效的.zip URL
+            // 7. 选择第一个有效的.zip URL
             let fileUrl = uniqueUrls.find(url => url.toLowerCase().includes('.jar.zip')) || uniqueUrls[0];
             fileUrl = fileUrl.trim();
             
-            // 4. 修复特殊字符
+            // 8. 修复特殊字符
             fileUrl = fileUrl
               .replace(/%2B/g, '+')
               .replace(/%20/g, ' ')
               .replace(/&amp;/g, '&')
               .replace(/&#43;/g, '+');
             
-            // 5. 处理GitHub代理URL
+            // 9. 处理GitHub代理URL
             if (fileUrl.includes('user-attachments.githubusercontent.com')) {
               fileUrl = fileUrl.replace(
                 'https://user-attachments.githubusercontent.com/',
@@ -116,76 +171,71 @@ jobs:
               );
             }
             
-            // 6. 提取文件名
+            // 10. 提取文件名
             let originalName = '';
             try {
-              // 优先从URL参数获取
               const urlObj = new URL(fileUrl, 'https://github.com');
               const params = new URLSearchParams(urlObj.search);
               
               if (params.has('name')) {
                 originalName = decodeURIComponent(params.get('name'));
               } else {
-                // 从路径提取
                 const path = urlObj.pathname;
                 originalName = decodeURIComponent(path.substring(path.lastIndexOf('/') + 1));
               }
             } catch (e) {
               console.log('URL解析失败，使用备用方法');
-              // 从字符串提取
               const match = fileUrl.match(/\/([^\/?]+?)(?:\?|$)/);
               originalName = match ? match[1].replace(/\+/g, ' ') : 'unknown.zip';
             }
             
-            // 7. 智能文件名修复 - 关键修复：正确处理.jar.zip
+            // 11. 智能文件名修复
             let cleanedName = originalName;
             const lowerName = cleanedName.toLowerCase();
             
-            // 确保以.zip结尾
             if (!lowerName.endsWith('.zip')) {
               cleanedName += '.zip';
             }
             
-            // 确保包含.jar（在.zip之前）
             if (!lowerName.includes('.jar')) {
-              // 在.zip前插入.jar
               cleanedName = cleanedName.replace(/\.zip$/, '.jar.zip');
             } else {
-              // 修复重复.jar问题 - 关键修复
               cleanedName = cleanedName.replace(/\.jar\.zip$/i, '.jar.zip');
             }
             
             console.log('修复后的文件名:', cleanedName);
             
-            // 8. 设置正确的JAR文件名 - 关键修复：只移除.zip后缀
+            // 12. 设置正确的JAR文件名
             let jarName = cleanedName;
             if (jarName.toLowerCase().endsWith('.jar.zip')) {
-              jarName = jarName.substring(0, jarName.length - 4); // 移除.zip
+              jarName = jarName.substring(0, jarName.length - 4);
             } else if (jarName.toLowerCase().endsWith('.zip')) {
               jarName = jarName.substring(0, jarName.length - 4) + '.jar';
             }
             
             console.log('JAR文件名:', jarName);
             
-            // 9. 设置输出
+            // 13. 设置输出
             core.setOutput('file_url', fileUrl);
             core.setOutput('original_name', cleanedName);
-            core.setOutput('jar_name', jarName); // 关键修复：正确JAR文件名
+            core.setOutput('jar_name', jarName);
+            core.setOutput('mc_version', mcVersion);
+            core.setOutput('loader', loader);
+            core.setOutput('mod_version', modVersion);
+            core.setOutput('release_tag', releaseTag);
             core.setOutput('debug_urls', uniqueUrls.join('\n'));
 
       - name: Download file
         env:
-          FILE_URL: ${{ steps.extract_attachment.outputs.file_url }}
-          OUTPUT_NAME: ${{ steps.extract_attachment.outputs.original_name }}
+          FILE_URL: ${{ steps.parse_fields.outputs.file_url }}
+          OUTPUT_NAME: ${{ steps.parse_fields.outputs.original_name }}
         run: |
           echo "下载URL: $FILE_URL"
           echo "保存为: $OUTPUT_NAME"
           
-          # 创建安全文件名
           SAFE_NAME=$(echo "$OUTPUT_NAME" | tr -cd 'a-zA-Z0-9._-')
           [ -z "$SAFE_NAME" ] && SAFE_NAME="mod.jar.zip"
           
-          # 使用curl下载
           curl -L \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/octet-stream" \
@@ -195,23 +245,20 @@ jobs:
             --output "$SAFE_NAME" \
             "$FILE_URL"
           
-          # 验证文件
           if [ ! -f "$SAFE_NAME" ]; then
             echo "❌ 下载失败"
             ls -la
             exit 1
           fi
           
-          # 重命名
           mv "$SAFE_NAME" "$OUTPUT_NAME"
           echo "下载完成: $(stat -c%s "$OUTPUT_NAME") 字节"
 
       - name: Verify ZIP integrity
         id: verify_zip
         run: |
-          FILE="${{ steps.extract_attachment.outputs.original_name }}"
+          FILE="${{ steps.parse_fields.outputs.original_name }}"
           
-          # 检查文件大小
           size=$(stat -c%s "$FILE")
           echo "文件大小: $size 字节"
           
@@ -225,14 +272,12 @@ jobs:
             exit 1
           fi
           
-          # 验证ZIP
           if ! unzip -t "$FILE" > /dev/null 2>&1; then
             echo "❌ 无效的ZIP文件"
             unzip -t "$FILE" 2>&1
             exit 1
           fi
           
-          # 计算SHA256
           sha256=$(sha256sum "$FILE" | awk '{print $1}')
           echo "sha256_hash=$sha256" >> $GITHUB_OUTPUT
           echo "短哈希: ${sha256:0:8}"
@@ -244,6 +289,7 @@ jobs:
           script: |
             const sha256 = '${{ steps.verify_zip.outputs.sha256_hash }}';
             const shortHash = sha256.substring(0, 8);
+            const releaseTag = '${{ steps.parse_fields.outputs.release_tag }}';
             
             try {
               // 检查重复
@@ -288,14 +334,42 @@ jobs:
               }
             }
             
+            // 检查是否已存在相同tag的Release
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: releaseTag
+              });
+              
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `⚠️ **相同版本已存在**\n\n相同版本(\`${releaseTag}\`)的文件已存在。如果这是更新，请在模组版本字段添加后缀(如-beta.2)。`
+              });
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed'
+              });
+              core.setFailed('Duplicate version tag');
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                console.log('检查版本标签时出错:', error.message);
+              }
+            }
+            
             core.setOutput('duplicate', 'false');
             core.setOutput('short_hash', shortHash);
 
       - name: Rename to JAR
         if: steps.check_duplicates.outputs.duplicate == 'false'
         run: |
-          mv "${{ steps.extract_attachment.outputs.original_name }}" "${{ steps.extract_attachment.outputs.jar_name }}"
-          echo "重命名为JAR完成: ${{ steps.extract_attachment.outputs.jar_name }}"
+          mv "${{ steps.parse_fields.outputs.original_name }}" "${{ steps.parse_fields.outputs.jar_name }}"
+          echo "重命名为JAR完成: ${{ steps.parse_fields.outputs.jar_name }}"
 
       - name: Create release
         id: create_release
@@ -307,34 +381,37 @@ jobs:
             const { createReadStream } = require('fs');
             const { basename } = require('path');
             
-            const tagName = `sha256-${{ steps.verify_zip.outputs.sha256_hash }}`;
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const releaseName = `Mod Upload ${timestamp} - ${{ steps.check_duplicates.outputs.short_hash }}`;
-            const jarFile = '${{ steps.extract_attachment.outputs.jar_name }}';
+            const releaseTag = '${{ steps.parse_fields.outputs.release_tag }}';
+            const releaseName = releaseTag; // 直接使用tag作为名称
+            const jarFile = '${{ steps.parse_fields.outputs.jar_name }}';
             const jarName = basename(jarFile);
             const fileSize = fs.statSync(jarFile).size;
             
+            const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+            const mcVersion = '${{ steps.parse_fields.outputs.mc_version }}';
+            const loader = '${{ steps.parse_fields.outputs.loader }}';
+            const modVersion = '${{ steps.parse_fields.outputs.mod_version }}';
+            const sha256 = '${{ steps.verify_zip.outputs.sha256_hash }}';
+            const shortHash = sha256.substring(0, 8);
+            
+            // Release正文 (时间戳放在末尾)
+            const body = `✅ 上传自 Issue #${context.issue.number}\n\n` +
+                         `📦 **详细信息**\n` +
+                         `- MC版本: ${mcVersion}\n` +
+                         `- 加载器: ${loader}\n` +
+                         `- 模组版本: ${modVersion}\n` +
+                         `- 文件哈希: ${shortHash}...\n\n` +
+                         `⚠️ **注意**: 仅仓库管理员可删除此文件\n\n` +
+                         `📅 上传时间: ${timestamp}`;
+            
             try {
-              // 检查release是否已存在
-              try {
-                await github.rest.repos.getReleaseByTag({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  tag: tagName
-                });
-                core.setFailed('文件已存在');
-                return;
-              } catch (e) {
-                if (e.status !== 404) throw e;
-              }
-              
               // 创建Release
               const release = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                tag_name: tagName,
+                tag_name: releaseTag,
                 name: releaseName,
-                body: `✅ 上传自 Issue #${context.issue.number}\n\n⚠️ 仅仓库管理员可删除此文件`,
+                body: body,
                 draft: false,
                 prerelease: false
               });
@@ -347,7 +424,7 @@ jobs:
                   'content-type': 'application/java-archive'
                 },
                 name: jarName,
-                data: createReadStream(jarFile)
+                 createReadStream(jarFile)
               });
               
               core.setOutput('release_url', release.data.html_url);
@@ -362,11 +439,16 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const downloadUrl = '${{ steps.create_release.outputs.download_url }}';
+            const releaseUrl = '${{ steps.create_release.outputs.release_url }}';
+            const shortHash = '${{ steps.check_duplicates.outputs.short_hash }}';
+            const releaseTag = '${{ steps.parse_fields.outputs.release_tag }}';
+            
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `✅ **上传成功!**\n\n📥 [下载文件](${{ steps.create_release.outputs.download_url }})\n📦 [所有文件](${{ steps.create_release.outputs.release_url }})\n🔖 哈希: \`${{ steps.check_duplicates.outputs.short_hash }}...\``
+              body: `✅ **上传成功!**\n\n🏷️ **版本**: \`${releaseTag}\`\n📥 [下载文件](${downloadUrl})\n📦 [所有文件](${releaseUrl})\n🔖 哈希: \`${shortHash}...\``
             });
             await github.rest.issues.update({
               issue_number: context.issue.number,

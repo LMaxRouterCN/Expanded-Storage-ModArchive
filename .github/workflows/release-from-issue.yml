@@ -459,7 +459,7 @@ jobs:
                 prerelease: false
               });
               
-              // 上传文件
+              // 上传文件 - 关键修复：添加data参数名
               const asset = await github.rest.repos.uploadReleaseAsset({
                 url: release.data.upload_url,
                 headers: {
@@ -467,7 +467,7 @@ jobs:
                   'content-type': 'application/java-archive'
                 },
                 name: jarName,
-                 createReadStream(jarFile)
+                data: createReadStream(jarFile) // 修复：添加data参数名
               });
               
               core.setOutput('release_url', release.data.html_url);

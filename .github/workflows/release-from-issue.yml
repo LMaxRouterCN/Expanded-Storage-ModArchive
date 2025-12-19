@@ -25,30 +25,18 @@ jobs:
             const body = issue.body || '';
             const title = issue.title || '';
             
-            // 1. 检查标题前缀
+            // 1. 验证Issue类型
             const hasValidTitle = title.trim().startsWith('[UPLOAD]');
+            const hasTemplateContent = body.includes('重要提示') && body.includes('重命名为 **.jar.zip**');
             
-            // 2. 检查模板关键特征
-            const hasTemplateContent = 
-              body.includes('重要提示') && 
-              body.includes('重命名为 **.jar.zip**') &&
-              body.includes('确认该文件无版权问题');
-            
-            // 3. 检查附件 - 使用更健壮的正则
-            const attachmentRegex = /!\[[^\]]*\]\(([^)]+?\.zip(?:[^)]*)?)\)/i;
-            const attachments = [...body.matchAll(attachmentRegex)];
-            const hasAttachment = attachments.length > 0;
-            
-            console.log(`标题有效: ${hasValidTitle}`);
-            console.log(`模板内容有效: ${hasTemplateContent}`);
-            console.log(`找到附件数量: ${attachments.length}`);
+            console.log(`标题有效: ${hasValidTitle}, 模板内容有效: ${hasTemplateContent}`);
             
             if (!(hasValidTitle || hasTemplateContent)) {
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ 未使用正确的模板\n\n请**务必**通过以下步骤创建:\n1. 点击"New Issue"按钮\n2. **选择"上传模组文件"模板** (不是空白模板)\n3. 按照模板指引操作`
+                body: `❌ 未使用正确的模板\n\n请**务必**通过以下步骤创建:\n1. 点击"Issues" → "New Issue"\n2. **选择"上传模组文件"模板** (不是空白模板)\n3. 按照模板指引操作`
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -60,12 +48,17 @@ jobs:
               return;
             }
             
-            if (!hasAttachment) {
+            // 2. 提取附件 - 修复正则表达式 (添加g标志)
+            const attachmentRegex = /!\[[^\]]*\]\(([^)]+?\.zip(?:[^)]*)?)\)/ig; // 关键修复: 添加g标志
+            const attachments = [...body.matchAll(attachmentRegex)];
+            console.log(`找到 ${attachments.length} 个附件`);
+            
+            if (attachments.length === 0) {
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ 未检测到有效的.zip附件\n\n**请按此操作**:\n1. 将 \`expandedstorage-*.jar\` 重命名为 \`expandedstorage-*.jar.zip\`\n2. **直接拖拽文件到评论框** (不要点击"Attach files")\n3. 等待上传完成后再提交Issue`
+                body: `❌ 未检测到有效的.zip附件\n\n**正确操作**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框 (等待上传完成)\n3. 确保附件显示为链接 (如: \`![文件名.jar.zip](https://...)\`)`
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -77,7 +70,7 @@ jobs:
               return;
             }
             
-            // 提取第一个附件
+            // 3. 处理第一个附件
             let fileUrl = attachments[0][1];
             console.log('原始附件URL:', fileUrl);
             
@@ -87,59 +80,52 @@ jobs:
               'https://github.com/'
             );
             
-            // 2. 完整URL解码
-            try {
-              fileUrl = decodeURIComponent(fileUrl);
-            } catch (e) {
-              console.log('第一次解码失败，尝试部分解码');
-              fileUrl = fileUrl.replace(/%2B/g, '+')
-                               .replace(/%20/g, ' ')
-                               .replace(/%25/g, '%');
-            }
-            console.log('解码后URL:', fileUrl);
+            // 4. 处理特殊字符 (如+号)
+            fileUrl = fileUrl.replace(/%2B/g, '+').replace(/%20/g, ' ');
+            console.log('处理后URL:', fileUrl);
             
-            // 3. 从URL提取文件名
+            // 5. 提取文件名
             let originalName = '';
             try {
-              const urlObj = new URL(fileUrl, 'https://github.com');
-              const urlParams = new URLSearchParams(urlObj.search);
+              // 从URL参数获取原始文件名
+              if (fileUrl.includes('?')) {
+                const urlParams = new URLSearchParams(fileUrl.split('?')[1]);
+                if (urlParams.has('name')) {
+                  originalName = decodeURIComponent(urlParams.get('name'));
+                }
+              }
               
-              // 优先从URL参数获取原始文件名
-              if (urlParams.has('name')) {
-                originalName = decodeURIComponent(urlParams.get('name'));
-              } else {
-                // 从路径提取
-                const pathParts = urlObj.pathname.split('/');
-                originalName = decodeURIComponent(pathParts[pathParts.length - 1]);
+              // 从路径提取
+              if (!originalName) {
+                const path = new URL(fileUrl, 'https://github.com').pathname;
+                originalName = decodeURIComponent(path.split('/').pop());
               }
             } catch (e) {
-              console.log('URL解析失败，尝试直接提取:', e.message);
-              // 直接提取最后一个/和?之间的内容
-              const match = fileUrl.match(/\/([^\/?]+?)(?:\?|$)/);
-              if (match) {
-                originalName = decodeURIComponent(match[1].replace(/\+/g, ' '));
-              } else {
-                originalName = 'unknown.zip';
-              }
+              console.log('URL解析失败，使用备用方法');
+              // 从URL字符串提取
+              const match = fileUrl.match(/\/([^\/?]+?)(?:\?|$)/i);
+              originalName = match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : 'unknown.zip';
             }
             
             console.log('提取的文件名:', originalName);
             
-            // 4. 智能文件名验证 (不严格要求.jar.zip结尾)
+            // 6. 智能文件名验证
             const lowerName = originalName.toLowerCase();
             let isValidFormat = false;
+            let cleanedName = originalName;
             
-            // 检查是否包含.jar且以.zip结尾
-            if (lowerName.includes('.jar') && lowerName.endsWith('.zip')) {
-              isValidFormat = true;
-            } 
-            // 兼容性检查：只检查是否包含.jar.zip
-            else if (lowerName.includes('.jar.zip')) {
+            if (lowerName.includes('.jar.zip')) {
               isValidFormat = true;
               // 修复不完整后缀
               if (!lowerName.endsWith('.jar.zip')) {
-                const baseName = originalName.split('.jar.zip')[0];
-                originalName = baseName + '.jar.zip';
+                const base = originalName.split('.jar.zip')[0];
+                cleanedName = base + '.jar.zip';
+              }
+            } else if (lowerName.endsWith('.zip')) {
+              // 尝试智能修复
+              if (lowerName.includes('.jar')) {
+                isValidFormat = true;
+                cleanedName = originalName.replace(/\.zip$/i, '.jar.zip');
               }
             }
             
@@ -160,7 +146,7 @@ jobs:
               return;
             }
             
-            // 5. 获取文件大小
+            // 7. 获取文件大小
             let contentLength = 0;
             try {
               const headers = { 
@@ -176,19 +162,17 @@ jobs:
               
               if (response.ok) {
                 contentLength = parseInt(response.headers.get('content-length') || '0');
-                console.log('HEAD请求成功，大小:', contentLength);
+                console.log('文件大小(HEAD):', contentLength);
               }
             } catch (error) {
-              console.log('HEAD请求失败，使用默认值:', error.message);
-              contentLength = 1024; // 1KB
+              console.log('HEAD请求失败:', error.message);
             }
             
             // 设置输出
             core.setOutput('file_url', fileUrl);
-            core.setOutput('original_name', originalName);
-            // 精确保留原始大小写，只替换最后的.zip
-            core.setOutput('jar_name', originalName.replace(/\.zip$/i, '.jar'));
-            core.setOutput('file_size', contentLength);
+            core.setOutput('original_name', cleanedName);
+            core.setOutput('jar_name', cleanedName.replace(/\.zip$/i, '.jar'));
+            core.setOutput('file_size', contentLength || 1024); // 默认1KB
             core.setOutput('is_valid_format', 'true');
 
       - name: Download attachment
@@ -200,33 +184,32 @@ jobs:
           echo "下载文件: $FILE_URL"
           echo "保存为: $OUTPUT_NAME"
           
-          # 创建安全的文件名 (移除危险字符)
-          SAFE_NAME=$(echo "$OUTPUT_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
-          echo "安全文件名: $SAFE_NAME"
+          # 创建安全的临时文件名
+          TEMP_NAME="upload_temp_$(date +%s).zip"
+          echo "临时文件名: $TEMP_NAME"
           
-          # 使用wget下载 (更好的错误处理)
-          wget -nv \
-            --header="Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            --header="Accept: application/octet-stream" \
-            --retry-connrefused \
-            --waitretry=1 \
-            --timeout=300 \
-            --tries=3 \
-            -O "$SAFE_NAME" \
+          # 使用curl下载 (兼容所有环境)
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            --retry 3 \
+            --retry-delay 5 \
+            --max-time 300 \
+            -o "$TEMP_NAME" \
             "$FILE_URL"
           
           # 验证下载
-          if [ ! -f "$SAFE_NAME" ]; then
+          if [ ! -f "$TEMP_NAME" ]; then
             echo "❌ 文件下载失败"
             ls -la
             exit 1
           fi
           
-          # 重命名回原始文件名 (保留扩展名)
-          mv "$SAFE_NAME" "$OUTPUT_NAME"
-          
-          actual_size=$(stat -c%s "$OUTPUT_NAME")
+          actual_size=$(stat -c%s "$TEMP_NAME")
           echo "下载完成，大小: $actual_size 字节"
+          
+          # 重命名回原始文件名
+          mv "$TEMP_NAME" "$OUTPUT_NAME"
 
       - name: Verify file integrity
         id: verify_file
@@ -250,18 +233,9 @@ jobs:
             exit 1
           fi
           
-          # 检查是否为ZIP文件
-          file_type=$(file -b "$FILE")
-          echo "文件类型: $file_type"
-          
-          if ! echo "$file_type" | grep -qi 'zip'; then
-            echo "❌ 文件不是有效的ZIP格式"
-            exit 1
-          fi
-          
           # 验证ZIP完整性
           if ! unzip -t "$FILE" > /dev/null 2>&1; then
-            echo "❌ ZIP文件损坏"
+            echo "❌ ZIP文件损坏或无效"
             unzip -t "$FILE" 2>&1
             exit 1
           fi
@@ -338,7 +312,6 @@ jobs:
           echo "重命名: $ORIGINAL → $TARGET"
           mv "$ORIGINAL" "$TARGET"
           
-          # 验证重命名
           if [ ! -f "$TARGET" ]; then
             echo "❌ 重命名失败"
             ls -la
@@ -377,7 +350,7 @@ jobs:
               }
               
               // 创建Release
-              const { data: release } = await github.rest.repos.createRelease({
+              const {  release } = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 tag_name: tagName,
@@ -430,4 +403,3 @@ jobs:
           rm -f *.zip *.jar || true
           rm -f *.tmp || true
           echo "清理完成"
-          ls -la

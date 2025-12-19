@@ -1,73 +1,26 @@
-name: 🚀 上传模组文件
-description: 上传一个 Expanded Storage 模组文件，机器人会自动为你创建 Release。
-title: "[上传] Expanded Storage - 请填写版本号"
-labels: ["upload", "mod-file"]
+name: 上传模组文件
+description: 上传被删除的模组文件（需重命名后缀）
+title: "[UPLOAD] "
+labels: ["upload"]
 body:
   - type: markdown
     attributes:
       value: |
-        感谢你为保存 Expanded Storage 做出贡献！
-        请按照以下步骤操作，机器人会自动处理你的上传。
-
-  - type: markdown
+        ⚠️ **重要提示** ⚠️
+        1. 将你的 `.jar` 文件重命名为 `.jar.zip` 后缀（例如：`mymod.jar` → `mymod.jar.zip`）
+        2. 将重命名后的文件拖拽到下方的附件区域
+        3. **不要**直接上传.jar文件（GitHub会拒绝）
+  - type: textarea
+    id: description
     attributes:
-      value: |
-        ### ⚠️ 重要：关于文件上传
-        GitHub 不允许直接上传 `.jar` 文件。为了解决这个问题，请在上传前：
-        1.  将你的模组文件（例如 `expandedstorage-1.0.0.jar`）**重命名**，在末尾加上 `.zip`。
-        2.  重命名后的文件看起来应该是这样：`expandedstorage-1.0.0.jar.zip`
-        3.  在下方的文件上传区域，上传这个 **`.jar.zip`** 文件。
-
-        机器人会自动将其恢复为 `.jar` 文件。
-
-  - type: input
-    id: mod_version
-    attributes:
-      label: 模组版本
-      description: 请输入你上传的模组文件的版本号 (例如: 9.1.3)。这个版本号将被用作 Release 的 Tag。
-      placeholder: 9.1.3
+      label: 模组描述
+      description: 简要说明这个模组的名称/版本/功能
     validations:
       required: true
-
-  - type: input
-    id: mc_version
+  - type: checkboxes
+    id: confirmation
     attributes:
-      label: Minecraft 版本
-      description: 这个模组版本适用于哪个 Minecraft 版本？(例如: 1.20.1)
-      placeholder: 1.20.1
-    validations:
-      required: true
-
-  - type: dropdown
-    id: mod_loader
-    attributes:
-      label: 模组加载器
-      description: 这个模组文件是为哪个加载器制作的？
+      label: 确认
       options:
-        - Forge
-        - Fabric
-        - NeoForge
-        - Quilt
-        - 其他
-    validations:
-      required: true
-
-  - type: textarea
-    id: release_notes
-    attributes:
-      label: 更新日志 (可选)
-      description: 如果你知道这个版本有什么变化，可以在这里简单描述一下。
-      placeholder: 例如：修复了一个重要的 bug，或者添加了新的箱子类型。
-
-  - type: markdown
-    attributes:
-      value: |
-        ---
-        ### 📁 文件上传区域
-        请将你重命名后的 `.jar.zip` 文件拖拽到下方文本框中。
-
-  - type: textarea
-    id: file_upload
-    attributes:
-      label: 拖拽文件到这里
-      description: 在此处上传你的 `.jar.zip` 文件。
+        - label: 我确认该文件无版权问题或已获授权
+          required: true

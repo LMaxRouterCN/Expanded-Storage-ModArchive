@@ -396,7 +396,7 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `⚠️ **相同版本已存在**\n\n相同版本(\`${releaseTag}\`)的文件已存在。如果这是更新，请在模组版本字段添加后缀(如-beta.2)。`
+                body: `⚠️ **相同版本已存在**\n\n相同版本(\`${releaseTag}\`)的文件已存在。如果那个文件的版本号有误，请联系仓库管理员或为此创建一个Issue。`
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,

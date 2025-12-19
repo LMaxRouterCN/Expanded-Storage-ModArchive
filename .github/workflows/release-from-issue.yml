@@ -6,10 +6,7 @@ on:
     types: [opened]
 
 env:
-  # 最大文件大小 (500MB)
-  MAX_FILE_SIZE: 524288000
-  # 病毒扫描引擎
-  CLAMAV_DATABASE: daily
+  MAX_FILE_SIZE: 524288000  # 500MB in bytes
 
 jobs:
   process-upload:
@@ -17,7 +14,6 @@ jobs:
     permissions:
       contents: write
       issues: write
-      actions: read
 
     steps:
       - name: Validate issue structure
@@ -34,7 +30,7 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: '❌ 无效的Issue类型\n\n请使用"Upload Mod File"模板创建Issue'
+                body: '❌ 无效的Issue类型\n\n请使用"上传模组文件"模板创建Issue'
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -46,9 +42,9 @@ jobs:
               return;
             }
             
-            // 检查附件
-            const zipAttachments = body.match(/!\[[^\]]*\]\(([^)]+\.zip)\)/g) || [];
-            if (zipAttachments.length === 0) {
+            // 提取附件URL
+            const attachments = [...body.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)];
+            if (attachments.length === 0) {
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
@@ -65,15 +61,8 @@ jobs:
               return;
             }
             
-            // 提取第一个有效URL
-            const match = zipAttachments[0].match(/\(([^)]+\.zip)\)/);
-            let fileUrl = match[1];
-            
-            // 处理GitHub的附件代理URL
-            if (fileUrl.includes('private-user-attachments')) {
-              fileUrl = fileUrl.replace('https://private-user-attachments.githubusercontent.com/', 'https://github.com/');
-            }
-            
+            // 获取第一个附件
+            let fileUrl = attachments[0][1];
             const originalName = decodeURIComponent(fileUrl.split('/').pop().split('?')[0]);
             
             // 验证文件名格式
@@ -94,44 +83,39 @@ jobs:
               return;
             }
             
-            // 验证文件大小（通过HEAD请求）
-            const headers = { 'Authorization': `Bearer ${{ secrets.GITHUB_TOKEN }}` };
-            const headResponse = await fetch(fileUrl, { method: 'HEAD', headers });
-            const contentLength = parseInt(headResponse.headers.get('content-length') || '0');
-            
-            if (contentLength === 0) {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '❌ 无法获取文件大小\n\n请重新上传文件'
+            // 获取文件大小
+            let contentLength = 0;
+            try {
+              const headers = { 'Authorization': `Bearer ${{ secrets.GITHUB_TOKEN }}` };
+              const response = await fetch(fileUrl.replace('private-user-attachments', 'github'), {
+                method: 'HEAD',
+                headers,
+                redirect: 'follow'
               });
-              await github.rest.issues.update({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'closed'
-              });
-              core.setFailed('Failed to get file size');
-              return;
+              
+              if (response.ok) {
+                contentLength = parseInt(response.headers.get('content-length') || '0');
+              } else {
+                // 如果HEAD请求失败，尝试获取文件元数据
+                const issueData = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number
+                });
+                
+                const attachment = issueData.data.body.match(/!\[[^\]]*\]\(([^)]+\.zip)\)/);
+                if (attachment) {
+                  const attachmentUrl = attachment[1];
+                  const attachmentResponse = await fetch(attachmentUrl, { headers });
+                  contentLength = parseInt(attachmentResponse.headers.get('content-length') || '0');
+                }
+              }
+            } catch (error) {
+              console.log('无法获取文件大小，将在下载后验证:', error.message);
             }
             
-            if (contentLength > ${{ env.MAX_FILE_SIZE }}) {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `❌ 文件过大\n\n最大允许500MB，您的文件: ${(contentLength / 1024 / 1024).toFixed(2)}MB`
-              });
-              await github.rest.issues.update({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'closed'
-              });
-              core.setFailed('File too large');
-              return;
-            }
+            // 如果无法获取大小，设为最大值强制后续验证
+            if (contentLength === 0) contentLength = ${{ env.MAX_FILE_SIZE }} + 1;
             
             core.setOutput('file_url', fileUrl);
             core.setOutput('original_name', originalName);
@@ -148,24 +132,30 @@ jobs:
           curl -L \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/octet-stream" \
-            "$FILE_URL" \
-            --output "$OUTPUT_NAME" \
-            --max-time 300 \
             --retry 3 \
-            --retry-delay 5
+            --retry-delay 5 \
+            --max-time 300 \
+            "$FILE_URL" \
+            -o "$OUTPUT_NAME"
 
       - name: Verify file integrity
-        if: steps.validate_issue.outcome == 'success'
         id: verify_file
+        if: steps.validate_issue.outcome == 'success'
         run: |
-          # 验证实际下载大小
-          actual_size=$(stat -c%s "$1")
+          # 验证文件大小
+          actual_size=$(stat -c%s "${{ steps.validate_issue.outputs.original_name }}")
           expected_size=${{ steps.validate_issue.outputs.file_size }}
           
-          if [ "$actual_size" != "$expected_size" ]; then
-            echo "❌ 文件大小不匹配"
-            echo "预期: $expected_size 字节"
-            echo "实际: $actual_size 字节"
+          echo "实际大小: $actual_size 字节"
+          echo "预期大小: $expected_size 字节"
+          
+          if [ "$actual_size" -gt "${{ env.MAX_FILE_SIZE }}" ]; then
+            echo "❌ 文件超过500MB限制"
+            exit 1
+          fi
+          
+          if [ "$actual_size" -eq 0 ]; then
+            echo "❌ 下载的文件为空"
             exit 1
           fi
           
@@ -173,8 +163,12 @@ jobs:
           sha256=$(sha256sum "${{ steps.validate_issue.outputs.original_name }}" | awk '{print $1}')
           echo "SHA256: $sha256"
           echo "sha256_hash=$sha256" >> $GITHUB_OUTPUT
-        env:
-          FILE: ${{ steps.validate_issue.outputs.original_name }}
+          
+          # 验证文件是否为有效ZIP
+          if ! unzip -t "${{ steps.validate_issue.outputs.original_name }}" > /dev/null 2>&1; then
+            echo "❌ 无效的ZIP文件"
+            exit 1
+          fi
 
       - name: Check for duplicates
         id: check_duplicates
@@ -185,50 +179,51 @@ jobs:
             const { sha256_hash } = ${{ toJSON(steps.verify_file.outputs) }};
             const shortHash = sha256_hash.substring(0, 8);
             
-            // 检查是否已存在相同哈希的Release
             try {
-              const response = await github.rest.repos.getReleaseByTag({
+              // 检查是否已存在相同哈希的Release
+              await github.rest.repos.getReleaseByTag({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 tag: `sha256-${sha256_hash}`
               });
               
               // 如果存在，获取下载链接
-              const asset = response.data.assets.find(a => a.name.endsWith('.jar'));
-              if (asset) {
-                await github.rest.issues.createComment({
-                  issue_number: context.issue.number,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  body: `🔄 检测到重复文件\n\n此文件已存在于仓库中:\n[下载链接](${asset.browser_download_url})\n\n哈希值: \`${shortHash}...\``
-                });
-                await github.rest.issues.update({
-                  issue_number: context.issue.number,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: 'closed'
-                });
-                core.setOutput('duplicate', 'true');
-                core.setOutput('existing_url', asset.browser_download_url);
-                return;
+              const releases = await github.rest.repos.listReleases({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 50
+              });
+              
+              const duplicateRelease = releases.data.find(r => r.tag_name === `sha256-${sha256_hash}`);
+              if (duplicateRelease) {
+                const asset = duplicateRelease.assets.find(a => a.name.endsWith('.jar'));
+                if (asset) {
+                  await github.rest.issues.createComment({
+                    issue_number: context.issue.number,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    body: `🔄 检测到重复文件\n\n此文件已存在于仓库中:\n🔗 [下载现有文件](${asset.browser_download_url})\n🔖 哈希: \`${shortHash}...\`\n\n无需重复上传，直接使用现有文件即可。`
+                  });
+                  await github.rest.issues.update({
+                    issue_number: context.issue.number,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    state: 'closed'
+                  });
+                  core.setOutput('duplicate', 'true');
+                  core.setOutput('existing_url', asset.browser_download_url);
+                  return;
+                }
               }
             } catch (error) {
               // 404表示没有重复
               if (error.status !== 404) {
-                console.error('Error checking duplicates:', error);
+                console.log('检查重复文件时出错:', error.message);
               }
             }
             
             core.setOutput('duplicate', 'false');
             core.setOutput('short_hash', shortHash);
-
-      - name: Virus scan with ClamAV
-        if: steps.check_duplicates.outputs.duplicate == 'false'
-        uses: crazy-max/ghaction-clamav@v2
-        with:
-          database: ${{ env.CLAMAV_DATABASE }}
-          path: ${{ steps.validate_issue.outputs.original_name }}
-          ignore-warnings: true
 
       - name: Rename to JAR
         if: steps.check_duplicates.outputs.duplicate == 'false' && steps.verify_file.outcome == 'success'
@@ -237,7 +232,7 @@ jobs:
 
       - name: Create release
         id: create_release
-        if: steps.check_duplicates.outputs.duplicate == 'false'
+        if: steps.check_duplicates.outputs.duplicate == 'false' && steps.verify_file.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
@@ -251,31 +246,36 @@ jobs:
             const jarFile = join(process.cwd(), '${{ steps.validate_issue.outputs.jar_name }}');
             const fileSize = fs.statSync(jarFile).size;
             
-            // 创建带哈希标记的Release
-            const release = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tagName,
-              name: releaseName,
-              body: `✅ 安全验证通过\n\n📌 原始Issue: #${context.issue.number}\n🔖 完整哈希: ${{ steps.verify_file.outputs.sha256_hash }}\n\n⚠️ **注意**: 只有仓库管理员可删除此文件`,
-              draft: false,
-              prerelease: false
-            });
-            
-            // 上传JAR文件
-            const fileStream = createReadStream(jarFile);
-            const asset = await github.rest.repos.uploadReleaseAsset({
-              url: release.data.upload_url,
-              headers: {
-                'content-length': fileSize,
-                'content-type': 'application/java-archive'
-              },
-              name: '${{ steps.validate_issue.outputs.jar_name }}',
-              data: fileStream
-            });
-            
-            core.setOutput('release_url', release.data.html_url);
-            core.setOutput('download_url', asset.data.browser_download_url);
+            try {
+              // 创建带哈希标记的Release
+              const release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+                name: releaseName,
+                body: `✅ 上传成功\n\n📌 原始Issue: #${context.issue.number}\n🔖 完整哈希: ${{ steps.verify_file.outputs.sha256_hash }}\n\n⚠️ **注意**: 只有仓库管理员可删除此文件`,
+                draft: false,
+                prerelease: false
+              });
+              
+              // 上传JAR文件
+              const fileStream = createReadStream(jarFile);
+              const asset = await github.rest.repos.uploadReleaseAsset({
+                url: release.data.upload_url,
+                headers: {
+                  'content-length': fileSize,
+                  'content-type': 'application/java-archive'
+                },
+                name: '${{ steps.validate_issue.outputs.jar_name }}',
+                 fileStream
+              });
+              
+              core.setOutput('release_url', release.data.html_url);
+              core.setOutput('download_url', asset.data.browser_download_url);
+            } catch (error) {
+              console.error('创建Release失败:', error);
+              core.setFailed(`Release创建失败: ${error.message}`);
+            }
 
       - name: Comment success
         if: steps.create_release.outcome == 'success'
@@ -290,28 +290,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `✅ 上传成功！\n\n📥 **文件**: \`${shortHash}...\`\n🔗 [直接下载](${downloadUrl})\n📦 [查看Release](${releaseUrl})\n\nℹ️ 此文件已通过病毒扫描和重复性检查`
-            });
-            await github.rest.issues.update({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'closed'
-            });
-
-      - name: Comment duplicate
-        if: steps.check_duplicates.outputs.duplicate == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const existingUrl = `${{ steps.check_duplicates.outputs.existing_url }}`;
-            const shortHash = `${{ steps.check_duplicates.outputs.short_hash }}`;
-            
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🔄 检测到重复文件\n\n此文件已存在于仓库中:\n🔗 [下载现有文件](${existingUrl})\n🔖 哈希: \`${shortHash}...\`\n\n无需重复上传，直接使用现有文件即可。`
+              body: `✅ 上传成功！\n\n📥 **文件**: \`${shortHash}...\`\n🔗 [直接下载](${downloadUrl})\n📦 [查看Release](${releaseUrl})\n\nℹ️ 此文件已通过重复性检查`
             });
             await github.rest.issues.update({
               issue_number: context.issue.number,

@@ -27,7 +27,7 @@ jobs:
             
             console.log('=== 调试信息 ===');
             console.log('标题:', title);
-            console.log('正文预览 (前300字符):', body.substring(0, 300));
+            console.log('完整正文 (用于调试):', body);
             console.log('=== 调试结束 ===');
             
             // 1. 验证模板使用
@@ -53,16 +53,48 @@ jobs:
               return;
             }
             
-            // 2. 提取必填字段
-            const mcVersionMatch = body.match(/-\s*MC版本\s*:\s*(.+)/i);
-            const loaderMatch = body.match(/-\s*模组加载器\s*:\s*\[x\]\s*(forge|neoforge|fabric)/i);
-            const modVersionMatch = body.match(/-\s*模组版本\s*:\s*(.+)/i);
+            // 2. 使用新方法提取字段 - 适配GitHub实际生成的Markdown
+            let mcVersion = '';
+            let loader = '';
+            let modVersion = '';
             
-            let mcVersion = mcVersionMatch ? mcVersionMatch[1].trim() : '';
-            let loader = loaderMatch ? loaderMatch[1].trim().toLowerCase() : '';
-            let modVersion = modVersionMatch ? modVersionMatch[1].trim() : '';
+            // 方法1: 匹配YAML格式的字段 (GitHub新格式)
+            const yamlRegex = /(?:\n\s*|- )([\w\s]+):\s*([^\n]+)/g;
+            let yamlMatch;
+            while ((yamlMatch = yamlRegex.exec(body)) !== null) {
+              const field = yamlMatch[1].trim();
+              const value = yamlMatch[2].trim();
+              
+              if (/mc版本/i.test(field)) {
+                mcVersion = value;
+              } else if (/模组加载器/i.test(field)) {
+                // 提取选中的加载器
+                const loaderMatch = value.match(/\[(x|X)\]\s*(forge|neoforge|fabric)/i);
+                if (loaderMatch) {
+                  loader = loaderMatch[2].toLowerCase();
+                }
+              } else if (/模组版本/i.test(field)) {
+                modVersion = value;
+              }
+            }
             
-            console.log('提取字段:');
+            // 方法2: 匹配传统Markdown格式 (兼容旧版)
+            if (!mcVersion) {
+              const mcMatch = body.match(/MC版本\s*[:：]?\s*\n\s*([^\n]+)/i);
+              mcVersion = mcMatch ? mcMatch[1].trim() : '';
+            }
+            
+            if (!loader) {
+              const loaderMatch = body.match(/模组加载器[^]*?-\s*\[(x|X)\]\s*(forge|neoforge|fabric)/i);
+              loader = loaderMatch ? loaderMatch[2].toLowerCase() : '';
+            }
+            
+            if (!modVersion) {
+              const modMatch = body.match(/模组版本\s*[:：]?\s*\n\s*([^\n]+)/i);
+              modVersion = modMatch ? modMatch[1].trim() : '';
+            }
+            
+            console.log('提取结果:');
             console.log('MC版本:', mcVersion);
             console.log('加载器:', loader);
             console.log('模组版本:', modVersion);
@@ -74,13 +106,19 @@ jobs:
             if (!modVersion) missingFields.push('模组版本');
             
             if (missingFields.length > 0) {
+              // 提供详细的缺失字段提示
+              let errorMessage = `❌ **缺少必填字段**\n\n请补充以下信息:\n`;
+              if (!mcVersion) errorMessage += `- [ ] **MC版本** (例如: 1.20.1)\n`;
+              if (!loader) errorMessage += `- [ ] **模组加载器** (选择: forge/neoforge/fabric)\n`;
+              if (!modVersion) errorMessage += `- [ ] **模组版本** (例如: 10.3.0-beta.5)\n\n`;
+              
+              errorMessage += `**修复方法**:\n1. 点击Issue右上角的"Edit"按钮\n2. 补充缺失字段\n3. 重新提交`;
+              
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ **缺少必填字段**\n\n请补充以下信息:\n` + 
-                      missingFields.map(field => `- [ ] ${field}`).join('\n') + 
-                      `\n\n修改Issue后重新提交`
+                body: errorMessage
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,
@@ -108,10 +146,8 @@ jobs:
             let releaseTag = `v${cleanMcVersion}-${cleanLoader}-${cleanModVersion}`;
             console.log('生成的Release Tag:', releaseTag);
             
-            // 6. 从正文提取所有URL
+            // 6. 提取附件URL (保持不变)
             const urls = [];
-            
-            // 策略1: 匹配Markdown图片/链接语法
             const markdownRegex = /!\[[^\]]*\]\(([^)]+?)\)|\[[^\]]*\]\(([^)]+?)\)/g;
             let urlMatch;
             while ((urlMatch = markdownRegex.exec(body)) !== null) {
@@ -121,12 +157,10 @@ jobs:
               }
             }
             
-            // 策略2: 匹配纯URL
             const urlRegex = /(https?:\/\/[^\s)]+?\.zip[^\s)]*)/ig;
             const pureUrls = body.match(urlRegex) || [];
             urls.push(...pureUrls);
             
-            // 去重
             const uniqueUrls = [...new Set(urls)];
             console.log('检测到的URL:', uniqueUrls);
             
@@ -135,7 +169,7 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框 (不是点击按钮)\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue`
+                body: `❌ **未检测到.zip文件**\n\n**正确上传步骤**:\n1. 将文件重命名为 \`文件名.jar.zip\`\n2. **直接拖拽**文件到评论框\n3. **等待上传完成** (看到文件名出现在评论框)\n4. 提交Issue`
               });
               await github.rest.issues.update({
                 issue_number: context.issue.number,

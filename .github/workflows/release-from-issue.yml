@@ -306,6 +306,7 @@ jobs:
         run: |
           FILE="${{ steps.parse_fields.outputs.original_name }}"
           
+          # 检查文件大小
           size=$(stat -c%s "$FILE")
           echo "文件大小: $size 字节"
           
@@ -319,12 +320,14 @@ jobs:
             exit 1
           fi
           
+          # 验证ZIP
           if ! unzip -t "$FILE" > /dev/null 2>&1; then
             echo "❌ 无效的ZIP文件"
             unzip -t "$FILE" 2>&1
             exit 1
           fi
           
+          # 计算SHA256
           sha256=$(sha256sum "$FILE" | awk '{print $1}')
           echo "sha256_hash=$sha256" >> $GITHUB_OUTPUT
           echo "短哈希: ${sha256:0:8}"
@@ -429,25 +432,18 @@ jobs:
             const { basename } = require('path');
             
             const releaseTag = '${{ steps.parse_fields.outputs.release_tag }}';
-            const releaseName = releaseTag; // 直接使用tag作为名称
+            const releaseName = releaseTag;
             const jarFile = '${{ steps.parse_fields.outputs.jar_name }}';
             const jarName = basename(jarFile);
             const fileSize = fs.statSync(jarFile).size;
             
             const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-            const mcVersion = '${{ steps.parse_fields.outputs.mc_version }}';
-            const loader = '${{ steps.parse_fields.outputs.loader }}';
-            const modVersion = '${{ steps.parse_fields.outputs.mod_version }}';
-            const sha256 = '${{ steps.verify_zip.outputs.sha256_hash }}';
-            const shortHash = sha256.substring(0, 8);
-            
-            // Release正文 (时间戳放在末尾)
             const body = `✅ 上传自 Issue #${context.issue.number}\n\n` +
                          `📦 **详细信息**\n` +
-                         `- MC版本: ${mcVersion}\n` +
-                         `- 加载器: ${loader}\n` +
-                         `- 模组版本: ${modVersion}\n` +
-                         `- 文件哈希: ${shortHash}...\n\n` +
+                         `- MC版本: ${{ steps.parse_fields.outputs.mc_version }}\n` +
+                         `- 加载器: ${{ steps.parse_fields.outputs.loader }}\n` +
+                         `- 模组版本: ${{ steps.parse_fields.outputs.mod_version }}\n` +
+                         `- 文件哈希: ${{ steps.check_duplicates.outputs.short_hash }}...\n\n` +
                          `⚠️ **注意**: 仅仓库管理员可删除此文件\n\n` +
                          `📅 上传时间: ${timestamp}`;
             

@@ -1,16 +1,16 @@
 name: 上传模组文件
-description: 上传被删除的模组文件
+description: 上传手中的模组文件
 title: "[UPLOAD] "
 labels: []
 body:
   - type: markdown
     attributes:
       value: |
-        **严格遵循以下步骤**
+        **按照以下步骤操作即可**
         1. 将 `.jar` 文件**重命名为 `.jar.zip`**  
         2. **直接拖拽**文件到下方评论框 (不是点击按钮)  
         3. **等待上传完成** (看到文件链接)  
-        4. 填写所有必填字段
+        4. 填写字段
   - type: input
     id: mc-version
     attributes:
@@ -43,8 +43,10 @@ body:
     attributes:
       label: 模组信息
       description: |
-        请提供额外信息 (可选):
+        提供额外信息 (可选):
         - 模组来源
+        - 测试环境
+        - 模组加载器版本
         - 功能说明
         - 兼容性注意事项
   - type: checkboxes

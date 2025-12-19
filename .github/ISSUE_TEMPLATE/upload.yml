@@ -8,7 +8,7 @@ body:
       value: |
         **按照以下步骤操作即可**
         1. 将 `.jar` 文件**重命名为 `.jar.zip`**  
-        2. **直接拖拽**文件到下方评论框 (不是点击按钮)  
+        2. **直接拖拽**文件到下方文本输入框内
         3. **等待上传完成** (看到文件链接)  
         4. 填写字段
   - type: input
@@ -41,7 +41,7 @@ body:
   - type: textarea
     id: mod-info
     attributes:
-      label: 模组信息
+      label: 模组文件和额外信息
       description: |
         提供额外信息 (可选):
         - 模组来源

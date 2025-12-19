@@ -1,25 +1,25 @@
 name: 上传模组文件
-description: 上传被删除的模组文件（需重命名后缀）
+description: 上传被删除的模组文件
 title: "[UPLOAD] "
-labels: ["upload"]
+labels: []
 body:
   - type: markdown
     attributes:
       value: |
         ⚠️ **重要提示** ⚠️
-        1. 将你的 `.jar` 文件重命名为 `.jar.zip` 后缀（例如：`mymod.jar` → `mymod.jar.zip`）
-        2. 将重命名后的文件拖拽到下方的附件区域
-        3. **不要**直接上传.jar文件（GitHub会拒绝）
-        4. 请确保文件无病毒且无版权争议
+        1. 将你的 `.jar` 文件**重命名为 `.jar.zip`** (例如: `expandedstorage-10.3.0-beta.5+1.20.1-forge.jar` → `expandedstorage-10.3.0-beta.5+1.20.1-forge.jar.zip`)
+        2. **直接拖拽**重命名后的文件到下方评论框 (等待上传完成)
+        3. **不要**点击"Attach files"按钮 (会导致格式错误)
   - type: textarea
     id: description
     attributes:
-      label: 模组描述
+      label: 模组信息
       description: |
-        请提供以下信息：
+        请提供:
         - 模组名称
-        - 适用版本 (MC版本/Forge/Fabric等)
-        - 文件来源说明
+        - 适用Minecraft版本
+        - Forge/Fabric版本
+        - 来源说明 (可选)
     validations:
       required: true
   - type: checkboxes
@@ -27,7 +27,7 @@ body:
     attributes:
       label: 确认
       options:
-        - label: 我确认该文件无版权问题或已获授权
+        - label: 我确认该文件无版权问题
           required: true
-        - label: 我理解上传的文件将永久公开
+        - label: 我理解文件将永久公开
           required: true

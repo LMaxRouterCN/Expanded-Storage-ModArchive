@@ -280,8 +280,11 @@ jobs:
           echo "下载URL: $FILE_URL"
           echo "保存为: $OUTPUT_NAME"
           
-          SAFE_NAME=$(echo "$OUTPUT_NAME" | tr -cd 'a-zA-Z0-9._-')
+          # 修正1: 允许文件名中包含 + 号 (适配不同模组作者的命名习惯)
+          SAFE_NAME=$(echo "$OUTPUT_NAME" | tr -cd 'a-zA-Z0-9._+-')
           [ -z "$SAFE_NAME" ] && SAFE_NAME="mod.jar.zip"
+          
+          echo "临时文件名: $SAFE_NAME"
           
           curl -L \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -298,7 +301,14 @@ jobs:
             exit 1
           fi
           
-          mv "$SAFE_NAME" "$OUTPUT_NAME"
+          # 修正2: 只有当文件名不同时才执行 mv (避免 1.21.x 等纯净文件名报错)
+          if [ "$SAFE_NAME" != "$OUTPUT_NAME" ]; then
+            mv "$SAFE_NAME" "$OUTPUT_NAME"
+            echo "文件已重命名: $SAFE_NAME -> $OUTPUT_NAME"
+          else
+            echo "文件名无需修改"
+          fi
+          
           echo "下载完成: $(stat -c%s "$OUTPUT_NAME") 字节"
 
       - name: Verify ZIP integrity

@@ -41,14 +41,7 @@ body:
   - type: textarea
     id: mod-info
     attributes:
-      label: 模组文件和额外信息
-      description: |
-        提供额外信息 (可选):
-        - 模组来源
-        - 测试环境
-        - 模组加载器版本
-        - 功能说明
-        - 兼容性注意事项
+      label: 模组文件
   - type: checkboxes
     id: confirmation
     attributes:
@@ -56,3 +49,14 @@ body:
       options:
         - label: 我确认此文件无版权问题
           required: true
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: 附言 / 备注
+      description: |
+        提供额外信息 (可选):
+        - 模组来源
+        - 测试环境
+        - 模组加载器版本
+        - 功能说明
+        - 兼容性注意事项

@@ -57,6 +57,7 @@ jobs:
             let mcVersion = '';
             let loader = '';
             let modVersion = '';
+            let additionalNotes = '';
             
             // 方法1: 匹配###标题格式 (GitHub实际渲染格式)
             const sections = body.split('### ');
@@ -67,6 +68,11 @@ jobs:
                 loader = section.split('\n')[1]?.trim().toLowerCase() || '';
               } else if (section.startsWith('模组版本')) {
                 modVersion = section.split('\n')[1]?.trim() || '';
+              } else if (section.startsWith('附言')) {
+                // 提取附言内容 (移除标题行，保留剩余所有内容)
+                const lines = section.split('\n');
+                lines.shift(); 
+                additionalNotes = lines.join('\n').trim();
               }
             }
             
@@ -74,6 +80,7 @@ jobs:
             console.log('MC版本:', mcVersion);
             console.log('加载器:', loader);
             console.log('模组版本:', modVersion);
+            console.log('附言:', additionalNotes);
             
             // 方法2: 备用正则 (兼容其他格式)
             if (!mcVersion || !loader || !modVersion) {
@@ -88,12 +95,23 @@ jobs:
               if (mcMatch) mcVersion = mcMatch[1].trim();
               if (loaderMatch) loader = loaderMatch[1].trim().toLowerCase();
               if (modMatch) modVersion = modMatch[1].trim();
+              
+              // 尝试提取附言 (从标题到结尾或下一个###)
+              if (!additionalNotes) {
+                const notesMatch = body.match(/###\s*附言[\s\S]+?(?=###|$)/i);
+                if (notesMatch) {
+                   const lines = notesMatch[0].split('\n');
+                   lines.shift();
+                   additionalNotes = lines.join('\n').trim();
+                }
+              }
             }
             
             console.log('最终提取结果:');
             console.log('MC版本:', mcVersion);
             console.log('加载器:', loader);
             console.log('模组版本:', modVersion);
+            console.log('附言:', additionalNotes);
             
             // 3. 验证必填字段
             const missingFields = [];
@@ -271,6 +289,7 @@ jobs:
             core.setOutput('mod_version', modVersion);
             core.setOutput('release_tag', releaseTag);
             core.setOutput('debug_urls', uniqueUrls.join('\n'));
+            core.setOutput('additional_notes', additionalNotes);
 
       - name: Download file
         env:
@@ -446,16 +465,27 @@ jobs:
             const jarFile = '${{ steps.parse_fields.outputs.jar_name }}';
             const jarName = basename(jarFile);
             const fileSize = fs.statSync(jarFile).size;
+            const additionalNotes = '${{ steps.parse_fields.outputs.additional_notes }}';
+            const uploader = context.payload.issue.user.login;
             
             const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-            const body = `✅ 上传自 Issue #${context.issue.number}\n\n` +
-                         `📦 **详细信息**\n` +
-                         `- MC版本: ${{ steps.parse_fields.outputs.mc_version }}\n` +
-                         `- 加载器: ${{ steps.parse_fields.outputs.loader }}\n` +
-                         `- 模组版本: ${{ steps.parse_fields.outputs.mod_version }}\n` +
-                         `- 文件哈希: ${{ steps.check_duplicates.outputs.short_hash }}...\n\n` +
-                         `⚠️ **注意**: 仅仓库管理员可删除此文件\n\n` +
-                         `📅 上传时间: ${timestamp}`;
+            
+            // 构建Release描述
+            let body = `✅ 上传自 Issue #${context.issue.number}\n` +
+                       `👤 上传者: @${uploader}\n\n` +
+                       `📦 **详细信息**\n` +
+                       `- MC版本: ${{ steps.parse_fields.outputs.mc_version }}\n` +
+                       `- 加载器: ${{ steps.parse_fields.outputs.loader }}\n` +
+                       `- 模组版本: ${{ steps.parse_fields.outputs.mod_version }}\n` +
+                       `- 文件哈希: ${{ steps.check_duplicates.outputs.short_hash }}...`;
+            
+            // 如果有附言，添加到描述中
+            if (additionalNotes) {
+              body += `\n\n📝 **附言**:\n${additionalNotes}`;
+            }
+            
+            body += `\n\n⚠️ **注意**: 仅仓库管理员可删除此文件\n\n` +
+                    `📅 上传时间: ${timestamp}`;
             
             try {
               // 创建Release
